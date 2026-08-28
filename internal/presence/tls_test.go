@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -203,7 +204,7 @@ func TestPKIIssuesUsableMaterial(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s was not issued: %v", name, err)
 		}
-		if strings.HasSuffix(name, ".key") && info.Mode().Perm() != 0o600 {
+		if strings.HasSuffix(name, ".key") && info.Mode().Perm() != 0o600 && runtime.GOOS != "windows" {
 			t.Fatalf("%s has mode %v; a private key must not be world readable", name, info.Mode().Perm())
 		}
 	}

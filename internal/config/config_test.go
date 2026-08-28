@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -245,7 +246,7 @@ func TestEnsureSeedIsStableAcrossRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	if perm := info.Mode().Perm(); perm != 0o600 && runtime.GOOS != "windows" {
 		t.Errorf("seed file mode = %o, want 600", perm)
 	}
 }

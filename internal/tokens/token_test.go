@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -85,7 +86,7 @@ func TestStorePersistsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	if perm := info.Mode().Perm(); perm != 0o600 && runtime.GOOS != "windows" {
 		t.Errorf("token registry mode = %o, want 600", perm)
 	}
 }
