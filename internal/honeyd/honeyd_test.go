@@ -793,3 +793,33 @@ func TestReconcileRebindsWhenTheIdentityChanges(t *testing.T) {
 		t.Fatalf("the old persona is still answering: %q", banner)
 	}
 }
+
+func TestEveryPersonaLooksLivedIn(t *testing.T) {
+	// This is a gate, not an observation. A decoy with no shell history and no
+	// logs is the easiest kind to spot, and personas are added often enough
+	// that "remember to add a history" is not a plan.
+	for _, name := range PersonaNames() {
+		t.Run(name, func(t *testing.T) {
+			p, err := BuildPersona(name, "gate-seed")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if days := time.Since(p.BootTime).Hours() / 24; days < 30 {
+				t.Errorf("uptime is %.0f days; production hosts are up for months", days)
+			}
+			history, logs := p.Liveness()
+			if history < 50 {
+				t.Errorf("shell history is %d bytes: the first thing anyone reads after landing", history)
+			}
+			if logs < 20 {
+				t.Errorf("only %d log lines: a real host accumulates thousands", logs)
+			}
+			if p.Hostname == "" || p.OSName == "" {
+				t.Error("a persona without a hostname or an OS cannot answer basic recon")
+			}
+			if len(p.Users) == 0 {
+				t.Error("a host with no accounts is not a host")
+			}
+		})
+	}
+}

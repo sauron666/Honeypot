@@ -101,6 +101,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/drivers", s.driversList)
 	s.mux.HandleFunc("POST /api/evidence/verify", s.verify)
 	s.mux.HandleFunc("POST /api/assure", s.runAssurance)
+	s.mux.HandleFunc("POST /api/assure/fingerprint", s.runFingerprint)
 	s.mux.HandleFunc("GET /api/config", s.currentConfig)
 	s.mux.HandleFunc("POST /api/config/plan", s.planConfig)
 	s.mux.HandleFunc("POST /api/config/apply", s.applyConfig)
@@ -417,6 +418,58 @@ func (s *Server) runAssurance(w http.ResponseWriter, r *http.Request) {
 
 // currentConfig reports what is running, so a manifest can be compared against
 // reality rather than against what someone believes is running.
+// runFingerprint scores how identifiable each decoy is.
+//
+// Every deception product claims its decoys are indistinguishable; none of them
+// publishes a number. This endpoint is that number, with the specific thing
+// that gives each decoy away and what to do about it.
+func (s *Server) runFingerprint(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Farm == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no decoy farm"})
+		return
+	}
+	personas := s.deps.Farm.Personas()
+
+	byDecoy := map[string]*assure.DecoyProfile{}
+	for _, l := range s.deps.Farm.Bound() {
+		if l.Proto != "tcp" {
+			continue
+		}
+		prof, ok := byDecoy[l.DecoyID]
+		if !ok {
+			prof = &assure.DecoyProfile{
+				DecoyID: l.DecoyID, Persona: l.Persona,
+				Endpoints: map[string]string{},
+			}
+			if p := personas[l.Persona]; p != nil {
+				history, logs := p.Liveness()
+				prof.Hostname, prof.OS = p.Hostname, p.OSName
+				prof.UptimeDays = time.Since(p.BootTime).Hours() / 24
+				prof.HistoryBytes, prof.LogLines = history, logs
+			}
+			byDecoy[l.DecoyID] = prof
+		}
+		_, port, err := net.SplitHostPort(l.Address)
+		if err != nil {
+			continue
+		}
+		if _, taken := prof.Endpoints[l.Service]; !taken {
+			prof.Endpoints[l.Service] = net.JoinHostPort("127.0.0.1", port)
+		}
+	}
+
+	profiles := make([]assure.DecoyProfile, 0, len(byDecoy))
+	for _, p := range byDecoy {
+		profiles = append(profiles, *p)
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	fp := &assure.Fingerprinter{Timeout: 5 * time.Second}
+	writeJSON(w, http.StatusOK, fp.Run(ctx, profiles))
+}
+
 func (s *Server) currentConfig(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Farm == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no decoy farm"})

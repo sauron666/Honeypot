@@ -42,6 +42,7 @@ commands:
   tokens      list, mint or delete honeytokens through a running director
   plan        show what applying a manifest would change, without doing it
   apply       reconcile a running director with a manifest, without a restart
+  fingerprint score how identifiable each decoy is, and say what gives it away
   assure      run the self-test: attack the deployment and verify it detected it
   status      query a running director over its API
   version     print the version
@@ -79,6 +80,8 @@ func main() {
 		err = planApply(args, false)
 	case "apply":
 		err = planApply(args, true)
+	case "fingerprint":
+		err = fingerprintCmd(args)
 	case "assure":
 		err = assureCmd(args)
 	case "status":
@@ -573,6 +576,57 @@ func planApply(args []string, apply bool) error {
 	return nil
 }
 
+// fingerprintCmd asks the director to attack its own decoys the way a careful
+// operator would when deciding whether a host is real.
+func fingerprintCmd(args []string) error {
+	fs := flag.NewFlagSet("fingerprint", flag.ExitOnError)
+	addr := fs.String("api", "http://127.0.0.1:8422", "director API base URL")
+	token := fs.String("token", "", "bearer token, if the API requires one")
+	verbose := fs.Bool("v", false, "show the fix for every finding")
+	fs.Parse(args)
+
+	raw, err := apiDoTimeout(http.MethodPost, *addr+"/api/assure/fingerprint", *token,
+		[]byte("{}"), 3*time.Minute)
+	if err != nil {
+		return err
+	}
+	var rep struct {
+		Decoys []struct {
+			DecoyID  string `json:"decoy_id"`
+			Persona  string `json:"persona"`
+			Score    int    `json:"score"`
+			Verdict  string `json:"verdict"`
+			Findings []struct {
+				Check, Detail, Fix string
+				Weight             int
+			} `json:"findings"`
+		}
+		WorstScore int    `json:"worst_score"`
+		Summary    string `json:"summary"`
+	}
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return fmt.Errorf("unexpected response: %w", err)
+	}
+
+	for _, d := range rep.Decoys {
+		fmt.Printf("\n%-16s %3d/100  %s  (%s)\n", d.DecoyID, d.Score, d.Verdict, d.Persona)
+		for _, f := range d.Findings {
+			fmt.Printf("    +%-3d %-26s %s\n", f.Weight, f.Check, f.Detail)
+			if *verbose && f.Fix != "" {
+				fmt.Printf("         fix: %s\n", f.Fix)
+			}
+		}
+		if len(d.Findings) == 0 {
+			fmt.Printf("    nothing found\n")
+		}
+	}
+	fmt.Printf("\n%s\n", rep.Summary)
+	if !*verbose {
+		fmt.Printf("run with -v to see how to fix each finding\n")
+	}
+	return nil
+}
+
 // assureCmd runs the deception self-test through a running director.
 func assureCmd(args []string) error {
 	fs := flag.NewFlagSet("assure", flag.ExitOnError)
@@ -580,7 +634,7 @@ func assureCmd(args []string) error {
 	token := fs.String("token", "", "bearer token, if the API requires one")
 	fs.Parse(args)
 
-	raw, err := apiDo(http.MethodPost, *addr+"/api/assure", *token, []byte("{}"))
+	raw, err := apiDoTimeout(http.MethodPost, *addr+"/api/assure", *token, []byte("{}"), 3*time.Minute)
 	if err != nil && !strings.Contains(err.Error(), "503") {
 		return err
 	}
@@ -654,6 +708,12 @@ func status(args []string) error {
 func apiGet(url, token string) ([]byte, error) { return apiDo(http.MethodGet, url, token, nil) }
 
 func apiDo(method, url, token string, body []byte) ([]byte, error) {
+	return apiDoTimeout(method, url, token, body, 10*time.Second)
+}
+
+// apiDoTimeout exists because the self-test endpoints deliberately wait: they
+// measure how slowly a decoy refuses a password, which is the point.
+func apiDoTimeout(method, url, token string, body []byte, timeout time.Duration) ([]byte, error) {
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -668,7 +728,7 @@ func apiDo(method, url, token string, body []byte) ([]byte, error) {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot reach the director at %s: %w", url, err)

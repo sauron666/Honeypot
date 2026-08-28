@@ -90,8 +90,13 @@ Deception-as-Code — виж какво ще се промени, преди д�
 от липсваща):
 
 ```bash
-./bin/miragectl assure          # атакува собствените примамки и проверява веригата
+./bin/miragectl assure           # атакува собствените примамки и проверява веригата
+./bin/miragectl fingerprint -v   # колко разпознаваеми са примамките и какво ги издава
 ```
+
+Всеки deception продукт твърди, че примамките му са неразличими. Никой не
+публикува число. `fingerprint` дава число за всяка примамка, конкретното нещо,
+което я издава, и какво да се направи по въпроса.
 
 И най-важното — примамката пише детекциите за реалната мрежа:
 
@@ -114,12 +119,12 @@ Deception-as-Code — виж какво ще се промени, преди д�
 | `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран дял с canary файлове), `windows/dc` (фалшива AD с kerberoast/AS-REP/ADCS/LAPS примамки) |
 | `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
 | `internal/forge` | **автогенериране на Sigma / Suricata / YARA / STIX + инцидентен доклад** |
-| `internal/assure` | **самотест: синтетичен атакуващ проверява, че цялата верига работи** |
+| `internal/assure` | **самотест** (синтетичен атакуващ проверява веригата) + **Detectability Score** (колко разпознаваема е всяка примамка и какво я издава) |
 | `internal/ransomware` | **шест независими сигнала за криптор + tarpit + извличане на контактите от бележката** |
 | `internal/engagement` | стичване на събития в една история + risk score; възстановяване от evidence файл |
 | `internal/alert` | праг по severity, дедупликация, линк към engagement |
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
-| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, status |
+| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
 (`test/e2e`), всичко под `-race`.

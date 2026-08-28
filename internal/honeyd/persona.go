@@ -95,6 +95,43 @@ func PersonaNames() []string {
 	return out
 }
 
+// Liveness reports how lived-in a persona looks: the size of its shell
+// histories and the number of log lines it carries.
+//
+// These are the two things anyone checks after landing on a host, and an empty
+// answer to either is the clearest sign that nobody has ever worked here.
+func (p *Persona) Liveness() (historyBytes, logLines int) {
+	if p.FS == nil {
+		return 0, 0
+	}
+	var walk func(path string, n *VNode)
+	walk = func(path string, n *VNode) {
+		if n.Dir {
+			for name, child := range n.Children {
+				walk(path+"/"+name, child)
+			}
+			return
+		}
+		base := path
+		if i := strings.LastIndex(path, "/"); i >= 0 {
+			base = path[i+1:]
+		}
+		lower := strings.ToLower(base)
+		switch {
+		// "history" rather than a suffix: Windows keeps
+		// ConsoleHost_history.txt, and a decoy that only looks lived-in on
+		// Linux is a decoy that gives itself away on Windows.
+		case strings.Contains(lower, "history"):
+			historyBytes += len(n.Content)
+		case strings.Contains(path, "/var/log/"), strings.Contains(path, "/Logs/"),
+			strings.HasSuffix(lower, ".log"), strings.HasSuffix(lower, ".evtx"):
+			logLines += strings.Count(n.Content, "\n")
+		}
+	}
+	walk("", p.FS.root)
+	return historyBytes, logLines
+}
+
 // Uptime renders the persona's uptime the way `uptime` would.
 func (p *Persona) Uptime(now time.Time) string {
 	d := now.Sub(p.BootTime)

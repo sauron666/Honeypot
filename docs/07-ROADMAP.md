@@ -105,8 +105,10 @@
       генерирано съдържание по вертикал и език
 - [ ] **`mirage-graph` — Attack Path Deception**: граф на реалната среда,
       автоматично разполагане по критичните пътища, метрика за покритие ★
-- [ ] **`mirage-assure` част 1 — Fingerprint Assurance** + Detectability Score
-      като CI gate ★
+- [x] **`mirage-assure` част 1 — Fingerprint Assurance**: Detectability Score
+      на примамка (uptime, история, логове, правдоподобен набор услуги, известни
+      honeypot банери, мигновен отказ на парола, несъгласие между услугите за
+      OS-а), плюс CI gate, който не позволява персона без история и логове ★
 - [ ] **`mirage-jit`** — реактивни примамки в реално време
 - [ ] Deception Coverage Score, fleet rotation, burn tracking
 - [ ] `NACDriver`: generic RADIUS (CoA) + FreeRADIUS — пренасочване на непознати

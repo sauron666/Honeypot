@@ -50,7 +50,43 @@ func buildFileServer(seed string) *Persona {
 	p.FS = fs
 	baseLinuxFS(p, fs)
 	buildShare(p, fs)
+
+	fs.AddFile("/root/.bash_history", strings.Join([]string{
+		"smbstatus",
+		"systemctl status smbd",
+		"testparm -s",
+		"chown -R fileadmin:finance /srv/shares/finance",
+		"du -sh /srv/shares/*",
+		"tail -f /var/log/samba/log.smbd",
+		"exit",
+	}, "\n")+"\n", "root", "root", "-rw-------", p.aged(3))
+	fs.AddFile("/home/fileadmin/.bash_history", strings.Join([]string{
+		"cd /srv/shares/hr", "ls -la 2026", "getfacl legal", "exit",
+	}, "\n")+"\n", "fileadmin", "fileadmin", "-rw-------", p.aged(7))
+
+	fs.AddFile("/var/log/samba/log.smbd", sambaLog(p), "root", "adm", "-rw-r-----", p.aged(1))
+	fs.AddFile("/var/log/auth.log", authLog(p), "root", "adm", "-rw-r-----", p.aged(1))
+	fs.AddFile("/var/log/syslog", syslogLines(p), "root", "adm", "-rw-r-----", p.aged(1))
 	return p
+}
+
+// sambaLog renders the connection noise a busy share accumulates. A file server
+// whose logs are empty has no users, and a file server with no users is not a
+// file server.
+func sambaLog(p *Persona) string {
+	var b strings.Builder
+	users := []string{"m.petrova", "g.ivanov", "e.dimitrova", "n.stoyanov", "fileadmin"}
+	for i := 0; i < 120; i++ {
+		ts := time.Now().Add(-time.Duration(p.rnd.Intn(7*86400)) * time.Second)
+		user := users[p.rnd.Intn(len(users))]
+		host := fmt.Sprintf("10.10.%d.%d", p.rnd.Intn(6)+20, p.rnd.Intn(200)+10)
+		share := shareDepartments[p.rnd.Intn(len(shareDepartments))].name
+		fmt.Fprintf(&b, "[%s, 2] ../../source3/smbd/service.c:connect_share(1234)\n",
+			ts.Format("2006/01/02 15:04:05.000000"))
+		fmt.Fprintf(&b, "  %s (ipv4:%s:%d) connect to service %s initially as user %s\n",
+			strings.ToUpper(user), host, p.rnd.Intn(20000)+40000, share, user)
+	}
+	return b.String()
 }
 
 // shareDepartments drive the generated tree. Each carries the sort of document

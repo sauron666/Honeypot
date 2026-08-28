@@ -148,7 +148,45 @@ func buildLinuxDB(seed string) *Persona {
 		"systemctl status mysql", "mysql -u root -p", "mysqldump --all-databases > /var/backups/all.sql",
 		"du -sh /var/lib/mysql", "exit",
 	}, "\n")+"\n", "root", "root", "-rw-------", p.aged(4))
+
+	fs.AddFile("/var/log/mysql/error.log", mysqlErrorLog(p), "mysql", "adm", "-rw-r-----", p.aged(1))
+	fs.AddFile("/var/log/auth.log", authLog(p), "root", "adm", "-rw-r-----", p.aged(1))
+	fs.AddFile("/var/log/syslog", syslogLines(p), "root", "adm", "-rw-r-----", p.aged(1))
 	return p
+}
+
+// mysqlErrorLog renders the sort of noise a long-running database accumulates.
+func mysqlErrorLog(p *Persona) string {
+	var b strings.Builder
+	for i := 0; i < 40; i++ {
+		ts := time.Now().Add(-time.Duration(p.rnd.Intn(72)) * time.Hour)
+		msg := pick(p, []string{
+			"[Note] Aborted connection to db: 'billing' user: 'billing_app' (Got timeout reading communication packets)",
+			"[Warning] Access denied for user 'root'@'10.10.22.14' (using password: YES)",
+			"[Note] InnoDB: page_cleaner: 1000ms intended loop took 4213ms",
+			"[Note] Event Scheduler: Loaded 0 events",
+		})
+		fmt.Fprintf(&b, "%s 0 %s\n", ts.Format("2006-01-02T15:04:05.000000Z"), msg)
+	}
+	return b.String()
+}
+
+// syslogLines renders general system noise.
+func syslogLines(p *Persona) string {
+	var b strings.Builder
+	for i := 0; i < 60; i++ {
+		ts := time.Now().Add(-time.Duration(p.rnd.Intn(86400)) * time.Second)
+		msg := pick(p, []string{
+			"systemd[1]: Started Daily apt download activities.",
+			"CRON[%d]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)",
+			"systemd[1]: logrotate.service: Succeeded.",
+			"kernel: [UFW BLOCK] IN=ens18 OUT= SRC=10.10.22.9 DST=10.66.0.10 PROTO=TCP SPT=51234 DPT=23",
+			"chronyd[812]: Selected source 10.10.0.10",
+		})
+		fmt.Fprintf(&b, "%s %s %s\n", ts.Format("Jan  2 15:04:05"), p.Hostname,
+			strings.ReplaceAll(msg, "%d", fmt.Sprint(p.rnd.Intn(30000)+1000)))
+	}
+	return b.String()
 }
 
 // buildLinuxBackup is a backup host. Ransomware operators look for these
@@ -202,6 +240,22 @@ func buildLinuxBackup(seed string) *Persona {
 	fs.AddFile("/etc/cron.d/backup",
 		"0 2 * * * backup /usr/local/bin/nightly-backup.sh >> /var/log/backup.log 2>&1\n",
 		"root", "root", "-rw-r--r--", p.aged(300))
+	fs.AddFile("/root/.bash_history", strings.Join([]string{
+		"df -h /srv/backup",
+		"rsync -av --progress /srv/backup/finance/ /mnt/offsite/finance/",
+		"tail -f /var/log/backup.log",
+		"systemctl status rsync",
+		"du -sh /srv/backup/*",
+		"crontab -l",
+		"exit",
+	}, "\n")+"\n", "root", "root", "-rw-------", p.aged(2))
+	fs.AddFile("/home/backup/.bash_history", strings.Join([]string{
+		"cd /srv/backup", "ls -la", "./verify-archives.sh", "exit",
+	}, "\n")+"\n", "backup", "backup", "-rw-------", p.aged(5))
+	fs.AddFile("/var/log/backup.log", backupLog(p), "root", "adm", "-rw-r-----", p.aged(1))
+	fs.AddFile("/var/log/auth.log", authLog(p), "root", "adm", "-rw-r-----", p.aged(1))
+	fs.AddFile("/var/log/syslog", syslogLines(p), "root", "adm", "-rw-r-----", p.aged(1))
+
 	fs.AddToken("/usr/local/bin/nightly-backup.sh",
 		"#!/bin/bash\n# nightly backup to offsite\nRSYNC_PASSWORD='"+p.RandomToken(14)+"'\n"+
 			"rsync -az --delete /srv/backup/ offsite@backup-remote."+p.Domain+"::vault/\n",
@@ -313,6 +367,21 @@ func authLog(p *Persona) string {
 		ts := time.Now().Add(-time.Duration(p.rnd.Intn(86400)) * time.Second)
 		b.WriteString(fmt.Sprintf("%s %s CRON[%d]: pam_unix(cron:session): session opened for user root(uid=0)\n",
 			ts.Format("Jan  2 15:04:05"), p.Hostname, p.rnd.Intn(30000)+1000))
+	}
+	return b.String()
+}
+
+// backupLog renders a nightly job's output over the last weeks.
+func backupLog(p *Persona) string {
+	var b strings.Builder
+	for day := 30; day > 0; day-- {
+		ts := time.Now().AddDate(0, 0, -day)
+		files := p.rnd.Intn(4000) + 12000
+		bytes := p.rnd.Intn(40) + 60
+		fmt.Fprintf(&b, "%s starting nightly backup\n", ts.Format("2006-01-02 02:00:01"))
+		fmt.Fprintf(&b, "%s sent %d files, %d.%d GB\n",
+			ts.Format("2006-01-02 02:4"+fmt.Sprint(p.rnd.Intn(9))+":12"), files, bytes, p.rnd.Intn(10))
+		fmt.Fprintf(&b, "%s completed with 0 errors\n", ts.Format("2006-01-02 02:52:30"))
 	}
 	return b.String()
 }

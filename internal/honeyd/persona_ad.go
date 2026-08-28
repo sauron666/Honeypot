@@ -76,6 +76,61 @@ func buildWindowsFS(p *Persona, fs *VFS) {
 		"SYSTEM", "SYSTEM", "-rw-------", p.aged(1))
 	fs.AddFile("C:/Users/Administrator/Desktop/passwords.txt.lnk",
 		"[shortcut]", "Administrator", "Administrators", "-rw-r-----", p.aged(90))
+
+	// A domain controller that nobody has ever administered is not a domain
+	// controller. PowerShell keeps its history here, and it is the first file
+	// anyone reads after landing on a Windows host.
+	fs.AddFile("C:/Users/Administrator/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt",
+		strings.Join([]string{
+			"Get-ADUser -Filter * -Properties LastLogonDate | Select Name,LastLogonDate",
+			"repadmin /replsummary",
+			"dcdiag /test:replications",
+			"Get-ADGroupMember 'Domain Admins'",
+			"Set-ADAccountPassword -Identity svc_backup",
+			"Get-GPOReport -All -ReportType Html -Path C:\\temp\\gpo.html",
+			"Restart-Service ADWS",
+			"exit",
+		}, "\r\n")+"\r\n",
+		"Administrator", "Administrators", "-rw-------", p.aged(4))
+
+	fs.Mkdir("C:/Windows/System32/winevt/Logs", "SYSTEM", "SYSTEM", "drwxr-x---", p.aged(600))
+	fs.AddFile("C:/Windows/System32/winevt/Logs/Security.evtx", securityEventLog(p),
+		"SYSTEM", "SYSTEM", "-rw-------", p.aged(1))
+	fs.AddFile("C:/Windows/System32/winevt/Logs/System.evtx", systemEventLog(p),
+		"SYSTEM", "SYSTEM", "-rw-------", p.aged(1))
+}
+
+// securityEventLog renders the authentication traffic a domain controller sees
+// constantly. An empty security log on a DC is impossible.
+func securityEventLog(p *Persona) string {
+	var b strings.Builder
+	users := []string{"m.petrova", "g.ivanov", "e.dimitrova", "n.stoyanov", "svc_sql", "svc_backup"}
+	for i := 0; i < 200; i++ {
+		ts := time.Now().Add(-time.Duration(p.rnd.Intn(3*86400)) * time.Second)
+		user := users[p.rnd.Intn(len(users))]
+		host := fmt.Sprintf("10.10.%d.%d", p.rnd.Intn(6)+20, p.rnd.Intn(200)+10)
+		id := pick(p, []string{"4624", "4768", "4769", "4776", "4634"})
+		fmt.Fprintf(&b, "%s EventID=%s Account=%s Workstation=%s LogonType=3\n",
+			ts.Format("2006-01-02T15:04:05.000Z"), id, user, host)
+	}
+	return b.String()
+}
+
+// systemEventLog renders service and replication noise.
+func systemEventLog(p *Persona) string {
+	var b strings.Builder
+	for i := 0; i < 80; i++ {
+		ts := time.Now().Add(-time.Duration(p.rnd.Intn(5*86400)) * time.Second)
+		msg := pick(p, []string{
+			"EventID=1074 The process wininit.exe has initiated the restart of computer",
+			"EventID=7036 The Windows Time service entered the running state",
+			"EventID=1704 Security policy in the Group Policy objects has been applied successfully",
+			"EventID=13 The time provider NtpClient is currently receiving valid time data",
+			"EventID=1129 Could not apply Group Policy: no domain controller available",
+		})
+		fmt.Fprintf(&b, "%s %s\n", ts.Format("2006-01-02T15:04:05.000Z"), msg)
+	}
+	return b.String()
 }
 
 // groupsXML renders a Group Policy Preferences file carrying a cpassword.
