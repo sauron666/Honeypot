@@ -68,8 +68,9 @@
 - [ ] Anti-fingerprinting pass #1 (SMBIOS/DMI, CPUID, дискови модели, MAC OUI)
 - [ ] `mirage-breadcrumbs` агент v1 (Windows/Linux) + Velociraptor artifacts
 - [ ] **`mirage-presence` — overlay режим** (WireGuard, ARP takeover) ★
-- [ ] **`mirage-assure` част 2 — Deception Assurance** (синтетичен атакуващ,
-      проверка на цялата верига до SIEM)
+- [x] **`mirage-assure` част 2 — Deception Assurance** (синтетичен атакуващ,
+      проверка на веригата примамка → събитие → съхранение; остава проверка
+      на доставката до SIEM)
 
 **Приемане:** оператор с Sliver/Cobalt Strike прави пълна верига в примамка →
 получаваме процесно дърво, инжекции, C2 конфигурация и видео, без нищо в госта.

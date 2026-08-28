@@ -78,6 +78,13 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 ./bin/miragectl verify --file data/evidence.jsonl     # доказателствата непокътнати?
 ```
 
+Провери, че платформата наистина детектира (мълчалива примамка е по-опасна
+от липсваща):
+
+```bash
+./bin/miragectl assure          # атакува собствените примамки и проверява веригата
+```
+
 И най-важното — примамката пише детекциите за реалната мрежа:
 
 ```bash
@@ -99,11 +106,12 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 | `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран файлов дял с canary файлове) |
 | `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
 | `internal/forge` | **автогенериране на Sigma / Suricata / YARA / STIX + инцидентен доклад** |
+| `internal/assure` | **самотест: синтетичен атакуващ проверява, че цялата верига работи** |
 | `internal/ransomware` | **шест независими сигнала за криптор + tarpit + извличане на контактите от бележката** |
 | `internal/engagement` | стичване на събития в една история + risk score; възстановяване от evidence файл |
 | `internal/alert` | праг по severity, дедупликация, линк към engagement |
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
-| `cmd/miragectl` | doctor, personas, services, drivers, verify, events, tokens, **forge**, status |
+| `cmd/miragectl` | doctor, personas, services, drivers, verify, events, tokens, **forge**, **assure**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
 (`test/e2e`), всичко под `-race`.

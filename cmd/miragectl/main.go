@@ -40,6 +40,7 @@ commands:
   events      query an evidence file offline
   forge       turn a recorded engagement into Sigma, Suricata, YARA and STIX
   tokens      list, mint or delete honeytokens through a running director
+  assure      run the self-test: attack the deployment and verify it detected it
   status      query a running director over its API
   version     print the version
 
@@ -72,6 +73,8 @@ func main() {
 		err = tokensCmd(args)
 	case "forge":
 		err = forgeCmd(args)
+	case "assure":
+		err = assureCmd(args)
 	case "status":
 		err = status(args)
 	case "version":
@@ -477,6 +480,65 @@ func writeBundle(dir, engID string, b *forge.Bundle) error {
 
 	fmt.Printf("\n%d rule(s), %d indicator(s), %d rejected candidate(s).\n",
 		len(b.Rules), len(b.IOCs), len(b.Rejected))
+	return nil
+}
+
+// assureCmd runs the deception self-test through a running director.
+func assureCmd(args []string) error {
+	fs := flag.NewFlagSet("assure", flag.ExitOnError)
+	addr := fs.String("api", "http://127.0.0.1:8422", "director API base URL")
+	token := fs.String("token", "", "bearer token, if the API requires one")
+	fs.Parse(args)
+
+	raw, err := apiDo(http.MethodPost, *addr+"/api/assure", *token, []byte("{}"))
+	if err != nil && !strings.Contains(err.Error(), "503") {
+		return err
+	}
+	if raw == nil {
+		return err
+	}
+	var rep struct {
+		Results []struct {
+			Scenario, Service, Why, Reason, Error string
+			Acted, Recorded, Skipped              bool
+			Latency                               int64 `json:"latency_ns"`
+			Events                                int
+		}
+		Passed, Failed, Skipped int
+		Healthy                 bool
+		Summary                 string
+	}
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return fmt.Errorf("unexpected response: %w", err)
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "RESULT\tSCENARIO\tSERVICE\tLATENCY\tEVENTS\tDETAIL")
+	for _, r := range rep.Results {
+		status, detail := "PASS", ""
+		switch {
+		case r.Skipped:
+			status, detail = "skip", r.Reason
+		case !r.Acted:
+			status, detail = "FAIL", "the decoy did not answer: "+r.Error
+		case !r.Recorded:
+			status, detail = "FAIL", r.Error
+		}
+		latency := "-"
+		if r.Latency > 0 {
+			latency = time.Duration(r.Latency).Round(time.Millisecond).String()
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
+			status, r.Scenario, r.Service, latency, r.Events, detail)
+	}
+	w.Flush()
+
+	fmt.Printf("\n%s\n", rep.Summary)
+	if !rep.Healthy {
+		// A silent honeypot is worse than none, so a failed self-test must be
+		// visible to whatever is running this.
+		os.Exit(1)
+	}
 	return nil
 }
 

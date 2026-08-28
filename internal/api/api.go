@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/sauron666/Honeypot/internal/alert"
+	"github.com/sauron666/Honeypot/internal/assure"
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
@@ -92,6 +93,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/decoys", s.decoys)
 	s.mux.HandleFunc("GET /api/drivers", s.driversList)
 	s.mux.HandleFunc("POST /api/evidence/verify", s.verify)
+	s.mux.HandleFunc("POST /api/assure", s.runAssurance)
 	s.mux.HandleFunc("GET /api/tokens", s.listTokens)
 	s.mux.HandleFunc("POST /api/tokens", s.mintToken)
 	s.mux.HandleFunc("DELETE /api/tokens/{id}", s.deleteToken)
@@ -362,6 +364,47 @@ func writeText(w http.ResponseWriter, s string) {
 	w.Write([]byte(s))
 }
 
+// runAssurance attacks the deployment with harmless probes and reports whether
+// each one produced the evidence it should have.
+//
+// It is a POST because it is an action with side effects -- traffic against the
+// decoys and events in the evidence chain -- not something a page refresh
+// should trigger.
+func (s *Server) runAssurance(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Farm == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no decoy farm"})
+		return
+	}
+	targets := map[string]string{}
+	for _, l := range s.deps.Farm.Bound() {
+		if l.Proto != "tcp" {
+			continue
+		}
+		// Probe loopback: the bind address may be a wildcard.
+		_, port, err := net.SplitHostPort(l.Address)
+		if err != nil {
+			continue
+		}
+		if _, taken := targets[l.Service]; !taken {
+			targets[l.Service] = net.JoinHostPort("127.0.0.1", port)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+
+	runner := &assure.Runner{Targets: targets, Store: s.deps.Store, Timeout: 15 * time.Second}
+	report := runner.Run(ctx, assure.DefaultScenarios())
+
+	code := http.StatusOK
+	if !report.Healthy {
+		// A failing self-test is a real problem with the deployment, and a
+		// monitoring system should be able to see it without parsing the body.
+		code = http.StatusServiceUnavailable
+	}
+	writeJSON(w, code, report)
+}
+
 func (s *Server) decoys(w http.ResponseWriter, r *http.Request) {
 	type decoyView struct {
 		Persona  string `json:"persona"`
@@ -394,6 +437,12 @@ func (s *Server) decoys(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"personas": out, "listeners": listeners, "projected_addresses": len(addrs),
+		"bound": func() any {
+			if s.deps.Farm == nil {
+				return []any{}
+			}
+			return s.deps.Farm.Bound()
+		}(),
 	})
 }
 

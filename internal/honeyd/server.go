@@ -61,6 +61,15 @@ func ServiceNames() []string {
 	return out
 }
 
+// BoundListener describes a listening decoy endpoint.
+type BoundListener struct {
+	Service string `json:"service"`
+	Address string `json:"address"`
+	Proto   string `json:"proto"`
+	DecoyID string `json:"decoy_id"`
+	Persona string `json:"persona"`
+}
+
 // EngagementResolver assigns an engagement id to an interaction, so that every
 // event from one attacker across many decoys and services stitches into one
 // story. The honeyd package only needs the id.
@@ -138,6 +147,7 @@ type Server struct {
 	personas map[string]*Persona
 
 	mu          sync.Mutex
+	bound       []BoundListener
 	listeners   []net.Listener
 	packetConns []net.PacketConn
 	perIP       map[string]int
@@ -239,6 +249,10 @@ func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
 		}
 		s.mu.Lock()
 		s.packetConns = append(s.packetConns, pc)
+		s.bound = append(s.bound, BoundListener{
+			Service: lc.Service, Address: pc.LocalAddr().String(), Proto: "udp",
+			DecoyID: decoyID, Persona: lc.Persona,
+		})
 		s.mu.Unlock()
 
 		s.log.Info("decoy listening", "service", lc.Service, "addr", addr, "proto", "udp",
@@ -259,6 +273,10 @@ func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
 
 	s.mu.Lock()
 	s.listeners = append(s.listeners, ln)
+	s.bound = append(s.bound, BoundListener{
+		Service: lc.Service, Address: ln.Addr().String(), Proto: "tcp",
+		DecoyID: decoyID, Persona: lc.Persona,
+	})
 	s.mu.Unlock()
 
 	s.log.Info("decoy listening",
@@ -528,6 +546,14 @@ func (s *Server) Addrs() []string {
 		out = append(out, pc.LocalAddr().String())
 	}
 	return out
+}
+
+// Bound returns the listening endpoints, which is how the assurance runner and
+// the API learn what is actually deployed.
+func (s *Server) Bound() []BoundListener {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]BoundListener(nil), s.bound...)
 }
 
 // Personas returns the instantiated personas, keyed by name.

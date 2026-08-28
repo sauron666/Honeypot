@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sauron666/Honeypot/internal/assure"
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/event"
 )
@@ -144,6 +145,10 @@ func (d *Dispatcher) pruneLocked() {
 }
 
 func (d *Dispatcher) buildAlert(e *event.Event) drivers.Alert {
+	// Synthetic traffic from the assurance runner must never be mistaken for a
+	// real intrusion, in a queue, a metric or a report.
+	synthetic := assure.IsSynthetic(e)
+
 	a := drivers.Alert{
 		ID:           e.Metadata.UID,
 		Time:         e.Timestamp(),
@@ -176,6 +181,10 @@ func (d *Dispatcher) buildAlert(e *event.Event) drivers.Alert {
 	}
 	a.Fields["persona"] = e.Mirage.Persona
 	a.Fields["event_class"] = e.ClassUID.String()
+	if synthetic {
+		a.Fields["synthetic"] = true
+		a.Title = "[self-test] " + a.Title
+	}
 	return a
 }
 

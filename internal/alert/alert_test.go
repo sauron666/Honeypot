@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -151,5 +152,25 @@ func TestFailingSinkDoesNotStopOthers(t *testing.T) {
 	}
 	if _, _, failed := d.Stats(); failed != 1 {
 		t.Fatalf("failed = %d, want 1", failed)
+	}
+}
+
+func TestSyntheticProbesAreMarkedInAlerts(t *testing.T) {
+	// Self-test traffic must never be mistaken for an intrusion in a queue,
+	// a metric or a report.
+	d, s := newDispatcher(t, event.SeverityHigh)
+	e := mkEvent(event.ClassCredentialOffer, event.SeverityHigh, "127.0.0.1")
+	e.Set("username", "MIRAGE-ASSURE-abc123")
+	d.Handle(context.Background(), e)
+
+	got := s.alerts()
+	if len(got) != 1 {
+		t.Fatalf("got %d alerts", len(got))
+	}
+	if got[0].Fields["synthetic"] != true {
+		t.Fatalf("the alert is not marked synthetic: %+v", got[0].Fields)
+	}
+	if !strings.HasPrefix(got[0].Title, "[self-test]") {
+		t.Fatalf("title should say it is a self-test: %q", got[0].Title)
 	}
 }

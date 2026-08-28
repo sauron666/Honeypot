@@ -758,3 +758,78 @@ alerts:
 		t.Fatalf("the generated document is not a zip package (%d bytes)", len(doc))
 	}
 }
+
+// TestSelfTestDetectsABrokenChain runs the assurance probe against a healthy
+// deployment, then against one whose evidence store cannot answer, and checks
+// that the difference is visible.
+//
+// A silent honeypot is worse than none: it produces the feeling of coverage
+// while something quietly swallows everything. This is the check that notices.
+func TestSelfTestDetectsABrokenChain(t *testing.T) {
+	d := deploy(t)
+
+	resp, err := http.Post(d.api+"/api/assure", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var rep struct {
+		Results []struct {
+			Scenario string `json:"scenario"`
+			Service  string `json:"service"`
+			Acted    bool   `json:"acted"`
+			Recorded bool   `json:"recorded"`
+			Skipped  bool   `json:"skipped"`
+			Events   int    `json:"events"`
+			Error    string `json:"error"`
+		} `json:"results"`
+		Passed  int    `json:"passed"`
+		Failed  int    `json:"failed"`
+		Healthy bool   `json:"healthy"`
+		Summary string `json:"summary"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rep); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("self-test on a healthy deployment returned %s: %s", resp.Status, rep.Summary)
+	}
+	if !rep.Healthy || rep.Failed != 0 {
+		var detail []string
+		for _, r := range rep.Results {
+			if !r.Skipped && (!r.Acted || !r.Recorded) {
+				detail = append(detail, r.Scenario+": "+r.Error)
+			}
+		}
+		t.Fatalf("healthy deployment failed its own self-test: %s\n%s",
+			rep.Summary, strings.Join(detail, "\n"))
+	}
+	if rep.Passed < 3 {
+		t.Fatalf("only %d scenarios ran; the deployment has http, telnet, ftp and redis decoys", rep.Passed)
+	}
+	for _, r := range rep.Results {
+		if r.Skipped {
+			continue
+		}
+		if r.Events == 0 {
+			t.Errorf("scenario %s passed but recorded no events", r.Scenario)
+		}
+	}
+
+	// The synthetic traffic must be marked, or the next report will describe a
+	// self-test as an intrusion.
+	var evResp struct {
+		Events []*event.Event `json:"events"`
+	}
+	d.getJSON(t, "/api/events?q=MIRAGE-ASSURE&limit=100", &evResp)
+	if len(evResp.Events) == 0 {
+		t.Fatal("the assurance probes left no identifiable trace")
+	}
+	for _, e := range evResp.Events {
+		if !strings.Contains(fmt.Sprint(e.Data)+e.Message, "MIRAGE-ASSURE") {
+			t.Errorf("event %s matched the probe marker but does not carry it", e.Metadata.UID)
+		}
+	}
+}
