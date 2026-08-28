@@ -48,7 +48,7 @@
 | — Синтетичен живот (обитаемост във времето) | ✅ готово | `internal/life` |
 | — Breadcrumbs (следи на реални endpoint-и) ★ ново | ✅ готово | `internal/breadcrumbs`, `cmd/mirage-breadcrumbs` |
 | 4/ADR-004 VMI observer (agentless) | ◐ наполовина: parsing/mapping готови, hypervisor-glue остава | `internal/drivers/observer`, `docs/adr/ADR-010` |
-| 4 Attack Path Deception (`mirage-graph`) | ✗ следващо; изисква реална среда | — |
+| 4 Attack Path Deception (`mirage-graph`) | ✅ готово (Dijkstra + coverage + suggest) | `internal/graph` |
 | 6 Just-in-Time примамки | ✗ | — |
 | 8 Attacker Toolkit DB + предсказване | ✅ готово (12 сигнатури) | `internal/toolkit` |
 | 9 Deception за AI агенти / MCP ★ | ◐ prompt-canary + LLM-key tokens + labyrinth | `internal/tokens/canary.go`, breadcrumbs |
@@ -58,6 +58,8 @@
 | 6 Just-in-Time примамки (реактивно вдигане) | ✅ готово | `internal/honeyd/jit.go` |
 | 15 Cognitive Friction (web labyrinth) | ✅ web labyrinth (infinite scanner trap) | `internal/honeyd/svc_http.go` |
 | 17 Engagement Economics | ✅ готово | `internal/engagement`, `miragectl economics` |
+| 14 Watermarking (невидимо проследяване на изтичане) | ✅ готово (3 техники + extract) | `internal/watermark` |
+| 16 Compliance evidence (NIS2/DORA/ISO/PCI/SOC2/IEC) | ✅ готово | `internal/compliance` |
 | 11–20 (останалите) | ✗ по-нататъшни фази | — |
 
 ★ = диференциатор, който конкурентите нямат.
