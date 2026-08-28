@@ -181,6 +181,8 @@ func suggestedServices(persona string) string {
 		return "ssh, mysql, mssql, redis"
 	case "linux/backup":
 		return "ssh, ftp, telnet"
+	case "windows/dc":
+		return "ldap, smb (kerberoast, AS-REP, ADCS and LAPS bait)"
 	case "linux/fileserver":
 		return "ftp, smb, ssh (ransomware engine watches the share)"
 	default:
@@ -205,6 +207,7 @@ func listServices() error {
 		"snmp":    "SNMP v1/v2c over UDP; records community strings, never amplifies",
 		"modbus":  "Modbus/TCP PLC; reads are recon, writes are treated as process manipulation",
 		"smb":     "SMB2 negotiation and NTLM; captures NetNTLMv2 hashes and the attacker's workstation name",
+		"ldap":    "decoy Active Directory; cleartext bind passwords, kerberoast/AS-REP/ADCS/LAPS enumeration",
 		"tokens":  "honeytoken callback receiver; must be reachable by whoever found the token",
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

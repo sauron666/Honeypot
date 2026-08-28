@@ -102,8 +102,8 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
 | `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424) |
-| `internal/honeyd` | 14 протокола: **ssh** (истински), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
-| `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран файлов дял с canary файлове) |
+| `internal/honeyd` | 15 протокола: **ssh** (истински), **ldap** (фалшив AD), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
+| `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран дял с canary файлове), `windows/dc` (фалшива AD с kerberoast/AS-REP/ADCS/LAPS примамки) |
 | `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
 | `internal/forge` | **автогенериране на Sigma / Suricata / YARA / STIX + инцидентен доклад** |
 | `internal/assure` | **самотест: синтетичен атакуващ проверява, че цялата верига работи** |
@@ -118,8 +118,9 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 
 ## Какво НЕ работи още
 
-Няма VMI observer, няма пълни VM примамки, няма identity/AD deception, няма
-Life Engine (синтетични потребители), няма overlay режим.
+Няма VMI observer, няма пълни VM примамки, няма Kerberos KDC (AS-REP и
+kerberoast се засичат при изброяването през LDAP, не при самото искане на
+тикет), няма Life Engine (синтетични потребители), няма overlay режим.
 
 SMB покрива negotiate, session setup (с улов на NetNTLMv2) и tree connect;
 файловите операции връщат ACCESS_DENIED. Сервирането на файлове по SMB2

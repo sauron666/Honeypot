@@ -88,6 +88,20 @@ honeyd:
         - service: smb
           port: 4445
 
+    # A domain controller. Every serious intrusion into a Windows estate runs
+    # LDAP queries early, and the query itself is the intent: a filter asking
+    # for accounts with an SPN is a kerberoast, one asking for accounts without
+    # pre-authentication is an AS-REP roast, one reading certificate template
+    # flags is ADCS privilege escalation. The directory answers plausibly, so
+    # the whole shopping list gets recorded.
+    - id: dcy-dc01
+      persona: windows/dc
+      services:
+        - service: ldap
+          port: 3389
+        - service: smb
+          port: 4446
+
     # An industrial decoy. A PLC cannot run an agent, which makes a passive
     # decoy the only detection some plants can have at all.
     - id: dcy-plc01

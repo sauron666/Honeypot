@@ -67,7 +67,7 @@ func TestValidationErrorsAreActionable(t *testing.T) {
 		},
 		{
 			"unknown persona",
-			"honeyd:\n  decoys:\n    - {id: d, persona: windows/dc, services: [{service: ssh, port: 22}]}\n",
+			"honeyd:\n  decoys:\n    - {id: d, persona: macos/laptop, services: [{service: ssh, port: 22}]}\n",
 			"unknown persona",
 		},
 		{

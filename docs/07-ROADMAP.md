@@ -79,8 +79,11 @@
 ---
 
 ## Фаза 3 — Identity, Ransomware, нови повърхности  (8–10 седмици) ★
-- [ ] `IdentityDriver: AD + ADCS` — honey forest автоматизация, kerberoast/AS-REP/
-      DCSync/ESC1 капани, honey GPO/SYSVOL/LAPS
+- [~] Identity deception: `ldap` decoy с фалшива AD — kerberoast SPN акаунти,
+      AS-REP roastable акаунт (с работещо bitwise matching правило), ESC1-подобен
+      ADCS шаблон, LAPS обект, GPP cpassword в SYSVOL, Domain Admins група.
+      Остават: истински KDC (AS-REP/TGS), DCSync canary, `IdentityDriver` към
+      реален AD
 - [x] Honey file server: генериран дял (хиляди файлове, реални magic bytes, canary файлове във всяка директория)
 - [~] Ransomware детекция: шест независими сигнала + tarpit + извличане на контакти от бележката; работи през FTP, остава SMB и VMI crypto hooks
 - [x] Tarpit (расте със съмнението, не пипа нормалната работа)

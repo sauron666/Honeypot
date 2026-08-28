@@ -1,6 +1,7 @@
 package assure
 
 import (
+	"bufio"
 	"context"
 	"net"
 	"strings"
@@ -71,6 +72,20 @@ func echoListener(t *testing.T, script func(net.Conn)) string {
 	return ln.Addr().String()
 }
 
+// respondHTTP404 reads the whole request before answering. Writing and closing
+// without reading races the client: the connection can be reset before it has
+// seen the response, which makes the test flaky rather than the code wrong.
+func respondHTTP404(c net.Conn) {
+	br := bufio.NewReader(c)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil || strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+	c.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
+}
+
 func TestScenarioIsSkippedWhenTheServiceIsNotDeployed(t *testing.T) {
 	r := &Runner{Targets: map[string]string{}, Store: &blindStore{}, Timeout: time.Second}
 	rep := r.Run(context.Background(), DefaultScenarios())
@@ -121,9 +136,7 @@ func TestUnreachableDecoyIsReportedAsSuch(t *testing.T) {
 func TestDecoyAnswersButEvidenceNeverArrives(t *testing.T) {
 	// The most dangerous failure mode: everything looks alive from outside,
 	// and nothing is being recorded.
-	addr := echoListener(t, func(c net.Conn) {
-		c.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
-	})
+	addr := echoListener(t, respondHTTP404)
 	r := &Runner{
 		Targets: map[string]string{"http": addr},
 		Store:   &blindStore{}, Timeout: 700 * time.Millisecond,
@@ -150,9 +163,7 @@ func TestDecoyAnswersButEvidenceNeverArrives(t *testing.T) {
 }
 
 func TestEvidenceFromAnotherProbeDoesNotCount(t *testing.T) {
-	addr := echoListener(t, func(c net.Conn) {
-		c.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
-	})
+	addr := echoListener(t, respondHTTP404)
 	st := &blindStore{}
 	r := &Runner{Targets: map[string]string{"http": addr}, Store: st, Timeout: 3 * time.Second}
 

@@ -553,7 +553,7 @@ func TestUnknownServiceAndPersonaFailAtStartup(t *testing.T) {
 	}
 
 	cfg = base
-	cfg.Listeners = []ListenerConfig{{Service: "telnet", Persona: "windows/dc"}}
+	cfg.Listeners = []ListenerConfig{{Service: "telnet", Persona: "macos/laptop"}}
 	if _, err := NewServer(cfg, col, nil, slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("unknown persona must be rejected at startup")
 	}
