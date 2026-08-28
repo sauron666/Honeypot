@@ -188,14 +188,64 @@ type FabricDriver interface {
 // Observer
 // ---------------------------------------------------------------------------
 
+// Sighting is one thing observed happening inside a decoy.
+//
+// It is the normalised form every observer produces, whatever its depth: an
+// agentless VMI driver reconstructs it from hypervisor traps, a future in-guest
+// agent would report it directly, and the rest of MIRAGE does not care which.
+// The fields are the union of what the deception layer needs to attribute and
+// score an event; a driver fills what it can see and leaves the rest zero.
+type Sighting struct {
+	// DecoyID is which decoy this happened in.
+	DecoyID string `json:"decoy_id"`
+	// Time is when, as the observer saw it.
+	Time time.Time `json:"time"`
+	// Kind is the normalised category: "process", "file", "registry",
+	// "injection", "crypto", "module", "net". The rest of the fields are read
+	// according to it.
+	Kind string `json:"kind"`
+	// Action is the verb: "exec", "write", "delete", "create", "load", etc.
+	Action string `json:"action"`
+	// Process is the acting process image, e.g. "powershell.exe".
+	Process string `json:"process,omitempty"`
+	// PID and PPID locate it in the process tree.
+	PID  int `json:"pid,omitempty"`
+	PPID int `json:"ppid,omitempty"`
+	// Target is what was acted on: a file path, a registry key, a target PID
+	// for an injection.
+	Target string `json:"target,omitempty"`
+	// CommandLine is the full command line where the observer recovered it,
+	// which is the single most useful field for understanding intent.
+	CommandLine string `json:"command_line,omitempty"`
+	// User is the security context the action ran as.
+	User string `json:"user,omitempty"`
+	// Detail carries driver-specific extras (a registry value, a crypto key,
+	// the injected bytes' length) without widening this struct per driver.
+	Detail map[string]string `json:"detail,omitempty"`
+}
+
 // ObserverDriver watches inside a decoy. Depth varies wildly between drivers,
 // which is exactly why capabilities are declared.
+//
+// The point of an observer is to see what an emulated service never can: what
+// the attacker actually ran once they were inside a full-OS decoy. Agentless
+// (VMI) drivers do it from the hypervisor, so there is nothing inside the guest
+// for the attacker to find or disable -- which is the whole reason a full-OS
+// decoy is worth its cost.
 type ObserverDriver interface {
 	Driver
 	Attach(ctx context.Context, decoyID string) error
 	Detach(ctx context.Context, decoyID string) error
 	DumpMemory(ctx context.Context, decoyID, outPath string) error
+	// Observe streams sightings from inside a decoy until the context is
+	// cancelled or the decoy stops. The channel is closed when the stream ends.
+	// A driver that cannot stream (declares neither CapTraceProcess nor a file
+	// trace capability) may return ErrObserveUnsupported.
+	Observe(ctx context.Context, decoyID string) (<-chan Sighting, error)
 }
+
+// ErrObserveUnsupported is returned by observers that cannot stream sightings.
+var ErrObserveUnsupported = errors.New("drivers: this observer cannot stream sightings")
 
 // ---------------------------------------------------------------------------
 // Sink
@@ -380,6 +430,19 @@ func (r *Registry) Fabric(name string, cfg map[string]any) (FabricDriver, error)
 		return nil, fmt.Errorf("%w: %s is not a FabricDriver", ErrWrongKind, name)
 	}
 	return f, nil
+}
+
+// Observer opens an observer driver with the right static type.
+func (r *Registry) Observer(name string, cfg map[string]any) (ObserverDriver, error) {
+	d, err := r.Open(KindObserver, name, cfg)
+	if err != nil {
+		return nil, err
+	}
+	o, ok := d.(ObserverDriver)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s is not an ObserverDriver", ErrWrongKind, name)
+	}
+	return o, nil
 }
 
 // Sink opens a sink driver with the right static type.

@@ -48,6 +48,7 @@ make build
 | `internal/life` | синтетичен живот: детерминистичен график на логини/логове/lastLogon като функция на времето; примамката изглежда все по-обитаема при всяка проверка |
 | `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
+| `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI; parsing/mapping готово и тествано, hypervisor-glue остава — виж ADR-010) |
 | `internal/api` | REST + вградена конзола (`internal/api/web/`) |
 | `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
 | `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите |
@@ -187,8 +188,12 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
    Липсва packer/cloud-init рецепта и `proxmox` драйвер.
 2. **Life Engine** — синтетични потребители, които поддържат примамката жива
    (логове, lastLogon, нови файлове) докато атакуващият я гледа.
-4. **VMI observer** (DRAKVUF/libvmi) — най-тежкото, изисква хипервайзор. Виж
-   `docs/adr/ADR-010-vmi-observer.md` за плана и какво остава като hypervisor-glue.
+4. **VMI observer — hypervisor glue.** Parsing (`ParseDrakvufLine`), mapping
+   (`SightingToEvent`) и стрийм цикълът са готови и тествани без хардуер.
+   Остава само Xen-glue: decoy→домейн резолвер, валидация на `drakvuf` спускането,
+   `DumpMemory`, crypto hook, wiring в `app.go`. Пълен план: `docs/adr/ADR-010`.
+   **Това се довършва на Xen dom0 хост** (напр. през Windows VS Code plugin към
+   машина с хипервайзор).
 5. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
 
 Отхвърлени съзнателно (виж `docs/11-IDEAS.md`): hack-back, автоматично

@@ -186,6 +186,7 @@ baseline, но първо снимка на мръсното състояние 
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
 | `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
 | `internal/drivers/fabric` | `nftables` (налага и проверява), `probe` (проверява реалността, не правилата) |
+| `internal/drivers/observer` | `none` + `drakvuf` — agentless наблюдение вътре в пълна VM примамка (процеси/файлове/регистри/инжекции); parsing и mapping готови, hypervisor-glue предстои |
 | `internal/farm` | **пълни VM примамки**: provisioner, baseline snapshot, reset след engagement, **burn** (запазва компрометираната машина като доказателство) |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424), `elastic`, `splunk` |
 | `internal/honeyd` | 16 протокола: **ssh** (истински), **ldap** (фалшив AD), **kerberos** (истински KDC: AS-REP/kerberoast с crackable hash), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
@@ -208,7 +209,10 @@ baseline, но първо снимка на мръсното състояние 
 
 ## Какво НЕ работи още
 
-Няма VMI observer.
+VMI observer-ът (DRAKVUF/libvmi) е наполовина: парсването на изхода и мапването
+към събития са готови и тествани, но hypervisor-glue-ът (спускане на drakvuf,
+attach към Xen домейн) изисква Xen dom0 хост и още не е валидиран — виж
+`docs/adr/ADR-010-vmi-observer.md`.
 
 Пълните VM примамки са реализирани откъм платформата — provisioner, containment
 gate, baseline, reset, burn — но **самите образи не се доставят**. Профил P4
