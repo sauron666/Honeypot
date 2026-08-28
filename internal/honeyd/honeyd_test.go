@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -69,7 +70,9 @@ func startFarm(t *testing.T, listeners ...ListenerConfig) (*Server, *collector, 
 		if listeners[i].Persona == "" {
 			listeners[i].Persona = "linux/web"
 		}
-		listeners[i].Port = 0 // ephemeral
+		// Port 0 asks the kernel for a free one. Callers that need a stable
+		// port -- reconcile tests, which must be able to name the same
+		// endpoint twice -- pass an explicit one.
 	}
 	cfg := Config{
 		Identity:   Identity{TenantID: "test", SiteID: "site", DecoyID: "dcy_test"},
@@ -641,4 +644,152 @@ func readUntil(t *testing.T, r *bufio.Reader, want string) string {
 	}
 	t.Fatalf("timed out waiting for %q, got %q", want, sb.String())
 	return ""
+}
+
+func TestReconcileAddsAndRemovesWithoutDisturbingTheRest(t *testing.T) {
+	telnetPort, redisPort, httpPort := freeTestPort(t), freeTestPort(t), freeTestPort(t)
+	srv, col, _ := startFarm(t,
+		ListenerConfig{Service: "telnet", Persona: "linux/web", DecoyID: "dcy-a", Port: telnetPort},
+		ListenerConfig{Service: "redis", Persona: "linux/db", DecoyID: "dcy-b", Port: redisPort},
+	)
+	before := srv.Bound()
+	if len(before) != 2 {
+		t.Fatalf("expected two endpoints, got %d", len(before))
+	}
+	var telnetAddr, redisAddr string
+	for _, b := range before {
+		switch b.Service {
+		case "telnet":
+			telnetAddr = b.Address
+		case "redis":
+			redisAddr = b.Address
+		}
+	}
+
+	// Keep telnet exactly as it is, drop redis, add http.
+	desired := []ListenerConfig{
+		{Service: "telnet", Persona: "linux/web", DecoyID: "dcy-a", Port: telnetPort},
+		{Service: "http", Persona: "linux/web", DecoyID: "dcy-a", Port: httpPort},
+	}
+	added, removed, err := srv.Reconcile(desired)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(added) != 1 || len(removed) != 1 {
+		t.Fatalf("added=%v removed=%v", added, removed)
+	}
+
+	// The untouched endpoint must still be serving: an attacker mid-engagement
+	// would notice a decoy that blinked.
+	conn, err := net.Dial("tcp", telnetAddr)
+	if err != nil {
+		t.Fatalf("the unchanged telnet decoy stopped answering: %v", err)
+	}
+	conn.Close()
+
+	// The removed endpoint must stop accepting.
+	if c, err := net.Dial("tcp", redisAddr); err == nil {
+		c.Close()
+		t.Fatal("the removed redis decoy is still accepting connections")
+	}
+
+	// And the new one must work end to end.
+	var httpAddr string
+	for _, b := range srv.Bound() {
+		if b.Service == "http" {
+			httpAddr = b.Address
+		}
+	}
+	if httpAddr == "" {
+		t.Fatal("the added http decoy is not bound")
+	}
+	resp, err := http.Get("http://" + httpAddr + "/.env")
+	if err != nil {
+		t.Fatalf("the added decoy does not answer: %v", err)
+	}
+	resp.Body.Close()
+	col.waitFor(t, "evidence from the newly added decoy", func(e *event.Event) bool {
+		return e.GetString("url_path") == "/.env"
+	})
+}
+
+func TestReconcileRejectsABadManifestWithoutChangingAnything(t *testing.T) {
+	port := freeTestPort(t)
+	srv, _, _ := startFarm(t,
+		ListenerConfig{Service: "telnet", Persona: "linux/web", DecoyID: "dcy-a", Port: port})
+	before := srv.Bound()
+
+	_, _, err := srv.Reconcile([]ListenerConfig{
+		{Service: "telnet", Persona: "linux/web", DecoyID: "dcy-a", Port: port},
+		{Service: "gopher", Persona: "linux/web", DecoyID: "dcy-x", Port: freeTestPort(t)},
+	})
+	if err == nil {
+		t.Fatal("an unknown service must be rejected")
+	}
+	// A manifest with a typo must not leave the farm half-applied.
+	after := srv.Bound()
+	if len(after) != len(before) || after[0].Address != before[0].Address {
+		t.Fatalf("the farm changed despite a rejected manifest: %v -> %v", before, after)
+	}
+}
+
+// freeTestPort asks the kernel for an unused port and gives it straight back.
+func freeTestPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	_, port, _ := net.SplitHostPort(l.Addr().String())
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestReconcileRebindsWhenTheIdentityChanges(t *testing.T) {
+	// The same port serving a different persona is a different decoy. Leaving
+	// the old one running while the plan says it changed is how a
+	// deception-as-code tool becomes untrustworthy.
+	port := freeTestPort(t)
+	srv, _, _ := startFarm(t,
+		ListenerConfig{Service: "telnet", Persona: "linux/web", DecoyID: "dcy-old", Port: port})
+
+	if got := srv.Bound()[0]; got.Persona != "linux/web" || got.DecoyID != "dcy-old" {
+		t.Fatalf("unexpected initial state: %+v", got)
+	}
+
+	added, removed, err := srv.Reconcile([]ListenerConfig{
+		{Service: "telnet", Persona: "linux/backup", DecoyID: "dcy-new", Port: port},
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(added) != 1 || len(removed) != 1 {
+		t.Fatalf("a replace must show as one removal and one addition: added=%v removed=%v", added, removed)
+	}
+
+	bound := srv.Bound()
+	if len(bound) != 1 {
+		t.Fatalf("expected one endpoint, got %d", len(bound))
+	}
+	if bound[0].Persona != "linux/backup" || bound[0].DecoyID != "dcy-new" {
+		t.Fatalf("the endpoint still carries the old identity: %+v", bound[0])
+	}
+
+	// And the new persona must actually be what answers.
+	conn, err := net.Dial("tcp", bound[0].Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	r := bufio.NewReader(conn)
+	banner := readUntil(t, r, "login:")
+	// linux/backup announces Debian 11; linux/web announces Debian 12.
+	if !strings.Contains(banner, "Debian GNU/Linux 11") {
+		t.Fatalf("the old persona is still answering: %q", banner)
+	}
 }

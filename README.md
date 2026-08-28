@@ -78,6 +78,14 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 ./bin/miragectl verify --file data/evidence.jsonl     # доказателствата непокътнати?
 ```
 
+Deception-as-Code — виж какво ще се промени, преди да се промени, и приложи
+без рестарт (рестартът е видим за атакуващ, който вече е вътре):
+
+```bash
+./bin/miragectl plan  --config profiles/p0-box.yaml
+./bin/miragectl apply --config profiles/p0-box.yaml
+```
+
 Провери, че платформата наистина детектира (мълчалива примамка е по-опасна
 от липсваща):
 
@@ -111,7 +119,7 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 | `internal/engagement` | стичване на събития в една история + risk score; възстановяване от evidence файл |
 | `internal/alert` | праг по severity, дедупликация, линк към engagement |
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
-| `cmd/miragectl` | doctor, personas, services, drivers, verify, events, tokens, **forge**, **assure**, status |
+| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
 (`test/e2e`), всичко под `-race`.

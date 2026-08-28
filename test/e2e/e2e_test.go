@@ -833,3 +833,151 @@ func TestSelfTestDetectsABrokenChain(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanAndApplyChangeTheFarmWithoutARestart exercises deception-as-code:
+// review a manifest against what is running, then reconcile.
+//
+// A platform that needs a restart to change gets changed less often than it
+// should, and a restart is visible to an attacker who is already engaged.
+func TestPlanAndApplyChangeTheFarmWithoutARestart(t *testing.T) {
+	dir := t.TempDir()
+	apiPort := freePort(t)
+	sshPort, httpPort, ldapPort := freePort(t), freePort(t), freePort(t)
+
+	manifest := func(extra string) string {
+		return fmt.Sprintf(`
+tenant: e2e
+site: lab
+data_dir: %s
+api: {listen: "127.0.0.1:%d"}
+honeyd:
+  bind: 127.0.0.1
+  decoys:
+    - id: dcy-web01
+      persona: linux/web
+      services:
+        - {service: ssh,  port: %d}
+        - {service: http, port: %d}
+%s
+alerts:
+  min_severity: high
+  sinks: [{driver: stdout}]
+`, dir, apiPort, sshPort, httpPort, extra)
+	}
+
+	cfg, err := config.Parse([]byte(manifest("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.New(cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		a.Stop(ctx)
+	}()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", apiPort)
+	waitUntil(t, 10*time.Second, "api", func() bool {
+		resp, err := http.Get(base + "/api/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	})
+
+	post := func(path, body string) map[string]any {
+		t.Helper()
+		resp, err := http.Post(base+path, "application/yaml", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	changes := func(resp map[string]any) []map[string]any {
+		plan, _ := resp["plan"].(map[string]any)
+		raw, _ := plan["changes"].([]any)
+		var out []map[string]any
+		for _, c := range raw {
+			out = append(out, c.(map[string]any))
+		}
+		return out
+	}
+
+	// Planning the running manifest must be a no-op.
+	if n := len(changes(post("/api/config/plan", manifest("")))); n != 0 {
+		t.Fatalf("planning the running manifest produced %d changes", n)
+	}
+
+	// Now add a domain controller and drop the http decoy.
+	added := fmt.Sprintf(`    - id: dcy-dc01
+      persona: windows/dc
+      services:
+        - {service: ldap, port: %d}
+`, ldapPort)
+	withoutHTTP := strings.Replace(manifest(added),
+		fmt.Sprintf("        - {service: http, port: %d}\n", httpPort), "", 1)
+
+	plan := post("/api/config/plan", withoutHTTP)
+	got := changes(plan)
+	if len(got) != 2 {
+		t.Fatalf("expected an add and a remove, got %d: %v", len(got), got)
+	}
+	// A plan must not change anything.
+	if resp, err := http.Get("http://" + fmt.Sprintf("127.0.0.1:%d", httpPort) + "/"); err != nil {
+		t.Fatal("planning took the http decoy down")
+	} else {
+		resp.Body.Close()
+	}
+
+	applied := post("/api/config/apply", withoutHTTP)
+	if applied["applied"] != true {
+		t.Fatalf("apply reported %v", applied["applied"])
+	}
+
+	// The new decoy answers.
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", ldapPort), 5*time.Second)
+	if err != nil {
+		t.Fatalf("the added ldap decoy does not answer: %v", err)
+	}
+	conn.Close()
+
+	// The removed one does not.
+	if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", httpPort), 2*time.Second); err == nil {
+		c.Close()
+		t.Fatal("the removed http decoy is still accepting connections")
+	}
+
+	// The untouched ssh decoy kept serving throughout.
+	conn, err = net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", sshPort), 5*time.Second)
+	if err != nil {
+		t.Fatalf("the unchanged ssh decoy stopped answering: %v", err)
+	}
+	conn.Close()
+
+	// Applying the same manifest again must be a no-op.
+	if n := len(changes(post("/api/config/plan", withoutHTTP))); n != 0 {
+		t.Fatalf("re-planning after apply produced %d changes", n)
+	}
+
+	// A change that cannot be applied in place must be reported, not silently
+	// ignored.
+	renamed := strings.Replace(withoutHTTP, "tenant: e2e", "tenant: somebody-else", 1)
+	restartPlan := post("/api/config/plan", renamed)
+	plan2, _ := restartPlan["plan"].(map[string]any)
+	req, _ := plan2["requires_restart"].([]any)
+	if len(req) == 0 {
+		t.Fatal("changing the tenant must be reported as needing a restart")
+	}
+}

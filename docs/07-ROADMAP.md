@@ -42,7 +42,8 @@
 - [x] Multi-IP projection (`addresses:` на примамка)
 - [~] **Персони** — три Linux персони с виртуална ФС, подхвърлени тайни и
       стабилен per-deployment seed; остават Deception Packs, i18n и още 12 персони
-- [ ] **Deception-as-Code**: `miragectl plan/apply/destroy` + drift detection
+- [x] **Deception-as-Code**: `miragectl plan/apply` с реконсилиране без рестарт;
+      промените, които не могат да се приложат на живо, се докладват изрично
 - [x] `mirage-tokens`: 8 типа + callback receiver + watcher + minting API + .docx генератор
 - [ ] `mirage-gateway` v1: `sinkhole`, kill switch, всички hard-coded предпазители
 - [ ] `ComputeDriver: proxmox`, `FabricDriver: opnsense` (втори драйвер за реалност)

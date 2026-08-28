@@ -23,6 +23,7 @@ import (
 
 	"github.com/sauron666/Honeypot/internal/alert"
 	"github.com/sauron666/Honeypot/internal/assure"
+	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
@@ -44,10 +45,16 @@ type Deps struct {
 	Registry   *drivers.Registry
 	Dispatcher *alert.Dispatcher
 	Tokens     *tokens.Store
-	Tenant     string
-	Site       string
-	StartedAt  time.Time
-	Log        *slog.Logger
+	// RunningConfig is what the process started with, so a plan can report the
+	// settings an apply cannot change.
+	RunningConfig *config.Config
+	// Apply reconciles the farm with a new listener set. It is supplied by the
+	// caller because applying needs runtime options the API does not own.
+	Apply     func(listeners []honeyd.ListenerConfig) (added, removed []string, err error)
+	Tenant    string
+	Site      string
+	StartedAt time.Time
+	Log       *slog.Logger
 	// Token, when set, is required as a Bearer token.
 	Token string
 }
@@ -94,6 +101,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/drivers", s.driversList)
 	s.mux.HandleFunc("POST /api/evidence/verify", s.verify)
 	s.mux.HandleFunc("POST /api/assure", s.runAssurance)
+	s.mux.HandleFunc("GET /api/config", s.currentConfig)
+	s.mux.HandleFunc("POST /api/config/plan", s.planConfig)
+	s.mux.HandleFunc("POST /api/config/apply", s.applyConfig)
 	s.mux.HandleFunc("GET /api/tokens", s.listTokens)
 	s.mux.HandleFunc("POST /api/tokens", s.mintToken)
 	s.mux.HandleFunc("DELETE /api/tokens/{id}", s.deleteToken)
@@ -403,6 +413,84 @@ func (s *Server) runAssurance(w http.ResponseWriter, r *http.Request) {
 		code = http.StatusServiceUnavailable
 	}
 	writeJSON(w, code, report)
+}
+
+// currentConfig reports what is running, so a manifest can be compared against
+// reality rather than against what someone believes is running.
+func (s *Server) currentConfig(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Farm == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no decoy farm"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tenant":    s.deps.Tenant,
+		"site":      s.deps.Site,
+		"listeners": s.deps.Farm.Listeners(),
+		"bound":     s.deps.Farm.Bound(),
+	})
+}
+
+// planConfig shows what applying a manifest would do, without doing it.
+func (s *Server) planConfig(w http.ResponseWriter, r *http.Request) {
+	desired, plan, err := s.buildPlan(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = desired
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plan": plan, "summary": plan.Summary(), "applied": false,
+	})
+}
+
+// applyConfig reconciles the running farm with a manifest.
+func (s *Server) applyConfig(w http.ResponseWriter, r *http.Request) {
+	desired, plan, err := s.buildPlan(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.deps.Apply == nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "this deployment does not support applying configuration"})
+		return
+	}
+	added, removed, err := s.deps.Apply(desired.Listeners())
+	if err != nil {
+		// Reconcile validates the whole set before touching anything, so a
+		// failure here means nothing changed.
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": err.Error(), "applied": false, "plan": plan,
+		})
+		return
+	}
+	s.deps.Log.Info("configuration applied",
+		"added", len(added), "removed", len(removed), "unchanged", plan.Unchanged)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plan": plan, "summary": plan.Summary(), "applied": true,
+		"added": added, "removed": removed,
+	})
+}
+
+// buildPlan parses a manifest from the request body and diffs it against what
+// is running.
+func (s *Server) buildPlan(r *http.Request) (*config.Config, config.Plan, error) {
+	if s.deps.Farm == nil {
+		return nil, config.Plan{}, errors.New("no decoy farm")
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 4*1024*1024))
+	if err != nil {
+		return nil, config.Plan{}, err
+	}
+	desired, err := config.Parse(raw)
+	if err != nil {
+		return nil, config.Plan{}, err
+	}
+	plan := config.DiffListeners(s.deps.Farm.Listeners(), desired.Listeners(), desired.Honeyd.Bind)
+	if s.deps.RunningConfig != nil {
+		plan.RequiresRestart = config.Immutable(s.deps.RunningConfig, desired)
+	}
+	return desired, plan, nil
 }
 
 func (s *Server) decoys(w http.ResponseWriter, r *http.Request) {

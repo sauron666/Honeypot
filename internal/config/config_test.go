@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/honeyd"
 )
 
 const minimal = `
@@ -262,5 +263,97 @@ func TestParseSeverity(t *testing.T) {
 	}
 	if _, err := ParseSeverity("urgent"); err == nil {
 		t.Error("an unknown severity must be rejected")
+	}
+}
+
+func TestDiffListenersDetectsEveryKindOfChange(t *testing.T) {
+	current := []honeyd.ListenerConfig{
+		{Service: "ssh", Port: 2222, Persona: "linux/web", DecoyID: "dcy-a"},
+		{Service: "http", Port: 8080, Persona: "linux/web", DecoyID: "dcy-a"},
+		{Service: "redis", Port: 6380, Persona: "linux/db", DecoyID: "dcy-b"},
+	}
+	desired := []honeyd.ListenerConfig{
+		{Service: "ssh", Port: 2222, Persona: "linux/web", DecoyID: "dcy-a"},   // unchanged
+		{Service: "http", Port: 8080, Persona: "windows/dc", DecoyID: "dcy-c"}, // replaced
+		{Service: "ldap", Port: 3389, Persona: "windows/dc", DecoyID: "dcy-c"}, // added
+		// redis is gone
+	}
+	p := DiffListeners(current, desired, "0.0.0.0")
+
+	if p.Unchanged != 1 {
+		t.Errorf("unchanged = %d, want 1", p.Unchanged)
+	}
+	byAction := map[string][]Change{}
+	for _, c := range p.Changes {
+		byAction[c.Action] = append(byAction[c.Action], c)
+	}
+	if len(byAction["add"]) != 1 || byAction["add"][0].Key != "ldap/0.0.0.0:3389" {
+		t.Errorf("add = %v", byAction["add"])
+	}
+	if len(byAction["remove"]) != 1 || byAction["remove"][0].Key != "redis/0.0.0.0:6380" {
+		t.Errorf("remove = %v", byAction["remove"])
+	}
+	// The address stays the same but the identity behind it changes, which an
+	// attacker who already looked would notice; it must not be reported as
+	// "unchanged".
+	if len(byAction["replace"]) != 1 {
+		t.Fatalf("replace = %v", byAction["replace"])
+	}
+	if !strings.Contains(byAction["replace"][0].Detail, "linux/web") {
+		t.Errorf("the replace detail should name what it was: %q", byAction["replace"][0].Detail)
+	}
+	if p.Empty() {
+		t.Error("a plan with changes must not report itself empty")
+	}
+}
+
+func TestDiffListenersIsEmptyForAnIdenticalManifest(t *testing.T) {
+	l := []honeyd.ListenerConfig{
+		{Service: "ssh", Port: 2222, Persona: "linux/web", DecoyID: "a"},
+		{Service: "http", Port: 8080, Persona: "linux/web", DecoyID: "a"},
+	}
+	p := DiffListeners(l, l, "0.0.0.0")
+	if !p.Empty() || p.Unchanged != 2 {
+		t.Fatalf("applying the same manifest twice should be a no-op: %+v", p)
+	}
+	if !strings.Contains(p.Summary(), "no changes") {
+		t.Errorf("summary = %q", p.Summary())
+	}
+}
+
+func TestDiffDistinguishesAddressesForTheSamePort(t *testing.T) {
+	// Projection puts the same service and port on many addresses; they are
+	// separate endpoints, not one.
+	current := []honeyd.ListenerConfig{
+		{Service: "ssh", Address: "10.66.0.31", Port: 22, Persona: "linux/web", DecoyID: "a"},
+	}
+	desired := []honeyd.ListenerConfig{
+		{Service: "ssh", Address: "10.66.0.31", Port: 22, Persona: "linux/web", DecoyID: "a"},
+		{Service: "ssh", Address: "10.66.0.32", Port: 22, Persona: "linux/web", DecoyID: "a"},
+	}
+	p := DiffListeners(current, desired, "0.0.0.0")
+	if p.Unchanged != 1 || len(p.Changes) != 1 || p.Changes[0].Action != "add" {
+		t.Fatalf("projection diff is wrong: %+v", p)
+	}
+}
+
+func TestImmutableSettingsAreReported(t *testing.T) {
+	running, _ := Parse([]byte(minimal))
+	desired, _ := Parse([]byte(minimal))
+	if got := Immutable(running, desired); len(got) != 0 {
+		t.Fatalf("identical configurations reported %v", got)
+	}
+
+	desired.Tenant = "other"
+	desired.DataDir = "/somewhere/else"
+	got := Immutable(running, desired)
+	if len(got) != 2 {
+		t.Fatalf("expected two immutable changes, got %v", got)
+	}
+	// The reason matters: an operator has to understand why an apply will not
+	// do what they asked.
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "evidence") {
+		t.Errorf("the explanation should say what would break: %v", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -59,6 +60,45 @@ func ServiceNames() []string {
 		out = append(out, n)
 	}
 	return out
+}
+
+// boundListener is one live endpoint and whatever is needed to close it.
+type boundListener struct {
+	info BoundListener
+	cfg  ListenerConfig
+	tcp  net.Listener
+	udp  net.PacketConn
+}
+
+func (b *boundListener) close() {
+	if b.tcp != nil {
+		b.tcp.Close()
+	}
+	if b.udp != nil {
+		b.udp.Close()
+	}
+}
+
+// listenerKey identifies an endpoint by what it occupies on the network.
+func listenerKey(lc ListenerConfig, bindAddr string) string {
+	host := lc.Address
+	if host == "" {
+		host = bindAddr
+	}
+	return fmt.Sprintf("%s/%s:%d", lc.Service, host, lc.Port)
+}
+
+// sameListener reports whether two configurations describe the same decoy on
+// the same endpoint.
+//
+// Identity is part of this, not just the address: the same port serving a
+// different persona is a different decoy, and an attacker who already looked
+// at it would see the change. Options are deliberately excluded -- some carry
+// injected values that cannot be compared, and a false difference would rebind
+// endpoints on every apply.
+func sameListener(a, b ListenerConfig) bool {
+	return a.Service == b.Service && a.Address == b.Address && a.Port == b.Port &&
+		a.Persona == b.Persona && a.DecoyID == b.DecoyID
 }
 
 // BoundListener describes a listening decoy endpoint.
@@ -146,14 +186,13 @@ type Server struct {
 
 	personas map[string]*Persona
 
-	mu          sync.Mutex
-	bound       []BoundListener
-	listeners   []net.Listener
-	packetConns []net.PacketConn
-	perIP       map[string]int
-	total       int
-	sessions    map[string]*Session
-	udpBudget   map[string]*rateBucket
+	mu        sync.Mutex
+	active    map[string]*boundListener
+	perIP     map[string]int
+	total     int
+	sessions  map[string]*Session
+	udpBudget map[string]*rateBucket
+	ctx       context.Context
 
 	wg     sync.WaitGroup
 	closed bool
@@ -176,6 +215,7 @@ func NewServer(cfg Config, emitter Emitter, resolver EngagementResolver, log *sl
 	s := &Server{
 		cfg: cfg, log: log, emitter: emitter, resolver: resolver,
 		personas:  map[string]*Persona{},
+		active:    map[string]*boundListener{},
 		perIP:     map[string]int{},
 		sessions:  map[string]*Session{},
 		udpBudget: map[string]*rateBucket{},
@@ -213,6 +253,10 @@ func (s *Server) persona(name string) (*Persona, error) {
 // Start binds every listener. It returns on the first bind failure with all
 // previously bound listeners closed, so a partial farm never runs unnoticed.
 func (s *Server) Start(ctx context.Context) error {
+	s.mu.Lock()
+	s.ctx = ctx
+	s.mu.Unlock()
+
 	for _, lc := range s.cfg.Listeners {
 		if err := s.startListener(ctx, lc); err != nil {
 			s.Close()
@@ -220,6 +264,108 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Reconcile brings the running farm in line with a new set of listeners,
+// without a restart.
+//
+// This is what makes deception-as-code usable: adding a decoy to a manifest and
+// applying it should not require taking the existing decoys down, because an
+// attacker who is mid-engagement would notice, and because a platform that
+// needs a restart to change gets changed less often than it should.
+//
+// Endpoints that are unchanged keep running untouched. Removing an endpoint
+// stops it accepting new connections; sessions already in progress finish
+// normally, since cutting an attacker off mid-command destroys the evidence.
+func (s *Server) Reconcile(desired []ListenerConfig) (added, removed []string, err error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, nil, errors.New("honeyd: server is closed")
+	}
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	current := make(map[string]*boundListener, len(s.active))
+	for k, v := range s.active {
+		current[k] = v
+	}
+	s.mu.Unlock()
+
+	// Validate the whole desired set before touching anything: a manifest with
+	// a typo must not leave the farm half-applied.
+	want := map[string]ListenerConfig{}
+	for i, lc := range desired {
+		if lc.Persona == "" {
+			return nil, nil, fmt.Errorf("honeyd: listener %d (%s/%d) has no persona", i, lc.Service, lc.Port)
+		}
+		if _, ok := serviceRegistry[lc.Service]; !ok {
+			return nil, nil, fmt.Errorf("honeyd: listener %d: unknown service %q", i, lc.Service)
+		}
+		if _, err := s.persona(lc.Persona); err != nil {
+			return nil, nil, err
+		}
+		key := listenerKey(lc, s.cfg.BindAddr)
+		if _, dup := want[key]; dup {
+			return nil, nil, fmt.Errorf("honeyd: %s is claimed twice", key)
+		}
+		want[key] = lc
+	}
+
+	// Replace first: an endpoint whose identity changed must be rebound, not
+	// left running under its old persona while the plan claims otherwise.
+	for key, lc := range want {
+		running, ok := current[key]
+		if !ok || sameListener(running.cfg, lc) {
+			continue
+		}
+		s.mu.Lock()
+		delete(s.active, key)
+		s.mu.Unlock()
+		running.close()
+		delete(current, key)
+		removed = append(removed, key)
+	}
+
+	for key, lc := range want {
+		if _, running := current[key]; running {
+			continue
+		}
+		if err := s.startListener(ctx, lc); err != nil {
+			// Roll back the endpoints this call opened, so a failure leaves the
+			// farm exactly as it was.
+			for _, k := range added {
+				s.mu.Lock()
+				if b, ok := s.active[k]; ok {
+					b.close()
+					delete(s.active, k)
+				}
+				s.mu.Unlock()
+			}
+			return nil, nil, err
+		}
+		added = append(added, key)
+	}
+
+	for key, b := range current {
+		if _, keep := want[key]; keep {
+			continue
+		}
+		s.mu.Lock()
+		delete(s.active, key)
+		s.mu.Unlock()
+		b.close()
+		removed = append(removed, key)
+	}
+
+	s.mu.Lock()
+	s.cfg.Listeners = desired
+	s.mu.Unlock()
+
+	sort.Strings(added)
+	sort.Strings(removed)
+	return added, removed, nil
 }
 
 func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
@@ -248,11 +394,13 @@ func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
 			return fmt.Errorf("honeyd: listen udp %s for %s: %w", addr, lc.Service, err)
 		}
 		s.mu.Lock()
-		s.packetConns = append(s.packetConns, pc)
-		s.bound = append(s.bound, BoundListener{
-			Service: lc.Service, Address: pc.LocalAddr().String(), Proto: "udp",
-			DecoyID: decoyID, Persona: lc.Persona,
-		})
+		s.active[listenerKey(lc, s.cfg.BindAddr)] = &boundListener{
+			cfg: lc, udp: pc,
+			info: BoundListener{
+				Service: lc.Service, Address: pc.LocalAddr().String(), Proto: "udp",
+				DecoyID: decoyID, Persona: lc.Persona,
+			},
+		}
 		s.mu.Unlock()
 
 		s.log.Info("decoy listening", "service", lc.Service, "addr", addr, "proto", "udp",
@@ -272,11 +420,13 @@ func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
 	}
 
 	s.mu.Lock()
-	s.listeners = append(s.listeners, ln)
-	s.bound = append(s.bound, BoundListener{
-		Service: lc.Service, Address: ln.Addr().String(), Proto: "tcp",
-		DecoyID: decoyID, Persona: lc.Persona,
-	})
+	s.active[listenerKey(lc, s.cfg.BindAddr)] = &boundListener{
+		cfg: lc, tcp: ln,
+		info: BoundListener{
+			Service: lc.Service, Address: ln.Addr().String(), Proto: "tcp",
+			DecoyID: decoyID, Persona: lc.Persona,
+		},
+	}
 	s.mu.Unlock()
 
 	s.log.Info("decoy listening",
@@ -400,6 +550,8 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, svc Service, p
 			s.mu.Lock()
 			closed := s.closed
 			s.mu.Unlock()
+			// A closed listener is normal: either shutdown, or this endpoint
+			// was removed by a reconcile.
 			if closed || errors.Is(err, net.ErrClosed) {
 				return
 			}
@@ -538,13 +690,11 @@ func (s *Server) ActiveSessions() int {
 func (s *Server) Addrs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]string, 0, len(s.listeners)+len(s.packetConns))
-	for _, l := range s.listeners {
-		out = append(out, l.Addr().String())
+	out := make([]string, 0, len(s.active))
+	for _, b := range s.active {
+		out = append(out, b.info.Address)
 	}
-	for _, pc := range s.packetConns {
-		out = append(out, pc.LocalAddr().String())
-	}
+	sort.Strings(out)
 	return out
 }
 
@@ -553,7 +703,24 @@ func (s *Server) Addrs() []string {
 func (s *Server) Bound() []BoundListener {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]BoundListener(nil), s.bound...)
+	out := make([]BoundListener, 0, len(s.active))
+	for _, b := range s.active {
+		out = append(out, b.info)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DecoyID != out[j].DecoyID {
+			return out[i].DecoyID < out[j].DecoyID
+		}
+		return out[i].Address < out[j].Address
+	})
+	return out
+}
+
+// Listeners returns the configuration currently in force.
+func (s *Server) Listeners() []ListenerConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]ListenerConfig(nil), s.cfg.Listeners...)
 }
 
 // Personas returns the instantiated personas, keyed by name.
@@ -575,16 +742,15 @@ func (s *Server) Close() error {
 		return nil
 	}
 	s.closed = true
-	listeners := s.listeners
-	packets := s.packetConns
-	s.listeners, s.packetConns = nil, nil
+	bound := make([]*boundListener, 0, len(s.active))
+	for _, b := range s.active {
+		bound = append(bound, b)
+	}
+	s.active = map[string]*boundListener{}
 	s.mu.Unlock()
 
-	for _, l := range listeners {
-		l.Close()
-	}
-	for _, pc := range packets {
-		pc.Close()
+	for _, b := range bound {
+		b.close()
 	}
 	s.wg.Wait()
 	return nil

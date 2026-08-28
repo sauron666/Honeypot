@@ -40,6 +40,8 @@ commands:
   events      query an evidence file offline
   forge       turn a recorded engagement into Sigma, Suricata, YARA and STIX
   tokens      list, mint or delete honeytokens through a running director
+  plan        show what applying a manifest would change, without doing it
+  apply       reconcile a running director with a manifest, without a restart
   assure      run the self-test: attack the deployment and verify it detected it
   status      query a running director over its API
   version     print the version
@@ -73,6 +75,10 @@ func main() {
 		err = tokensCmd(args)
 	case "forge":
 		err = forgeCmd(args)
+	case "plan":
+		err = planApply(args, false)
+	case "apply":
+		err = planApply(args, true)
 	case "assure":
 		err = assureCmd(args)
 	case "status":
@@ -483,6 +489,87 @@ func writeBundle(dir, engID string, b *forge.Bundle) error {
 
 	fmt.Printf("\n%d rule(s), %d indicator(s), %d rejected candidate(s).\n",
 		len(b.Rules), len(b.IOCs), len(b.Rejected))
+	return nil
+}
+
+// planApply implements deception-as-code: compare a manifest against what is
+// running, and optionally reconcile.
+//
+// Deception changes what an attacker sees, so being able to review a change
+// before making it matters more here than in most infrastructure.
+func planApply(args []string, apply bool) error {
+	name := "plan"
+	if apply {
+		name = "apply"
+	}
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	path := fs.String("config", "profiles/p0-box.yaml", "manifest to apply")
+	addr := fs.String("api", "http://127.0.0.1:8422", "director API base URL")
+	token := fs.String("token", "", "bearer token, if the API requires one")
+	fs.Parse(args)
+
+	// Validate locally first: a manifest that will not parse should fail here,
+	// not after a round trip.
+	if _, err := config.Load(*path); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(*path)
+	if err != nil {
+		return err
+	}
+
+	endpoint := "/api/config/plan"
+	if apply {
+		endpoint = "/api/config/apply"
+	}
+	body, err := apiDo(http.MethodPost, *addr+endpoint, *token, raw)
+	if err != nil {
+		return err
+	}
+
+	var resp struct {
+		Plan struct {
+			Changes []struct {
+				Action  string `json:"action"`
+				Key     string `json:"key"`
+				DecoyID string `json:"decoy_id"`
+				Persona string `json:"persona"`
+				Detail  string `json:"detail"`
+			}
+			RequiresRestart []string `json:"requires_restart"`
+			Unchanged       int
+		}
+		Summary        string
+		Applied        bool
+		Added, Removed []string
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return fmt.Errorf("unexpected response: %w", err)
+	}
+
+	if len(resp.Plan.Changes) == 0 {
+		fmt.Printf("%s\n", resp.Summary)
+	} else {
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "ACTION\tENDPOINT\tDECOY\tPERSONA\tDETAIL")
+		for _, c := range resp.Plan.Changes {
+			marker := map[string]string{"add": "+", "remove": "-", "replace": "~"}[c.Action]
+			fmt.Fprintf(w, "%s %s\t%s\t%s\t%s\t%s\n",
+				marker, c.Action, c.Key, orDash(c.DecoyID), orDash(c.Persona), c.Detail)
+		}
+		w.Flush()
+		fmt.Printf("\n%s\n", resp.Summary)
+	}
+
+	for _, r := range resp.Plan.RequiresRestart {
+		fmt.Printf("  restart required: %s\n", r)
+	}
+	if !apply && len(resp.Plan.Changes) > 0 {
+		fmt.Printf("\nrun \"miragectl apply -config %s\" to make these changes\n", *path)
+	}
+	if apply && resp.Applied {
+		fmt.Printf("applied: %d endpoint(s) added, %d removed\n", len(resp.Added), len(resp.Removed))
+	}
 	return nil
 }
 

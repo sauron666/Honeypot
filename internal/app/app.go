@@ -151,13 +151,49 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	a.API, err = api.New(cfg.API.Listen, api.Deps{
 		Store: evStore, Tracker: a.Tracker, Farm: a.Farm, Registry: a.Registry,
-		Dispatcher: a.Dispatcher, Tokens: a.Tokens, Tenant: cfg.Tenant, Site: cfg.Site,
+		Dispatcher: a.Dispatcher, Tokens: a.Tokens, RunningConfig: cfg,
+		Apply:  a.ApplyListeners,
+		Tenant: cfg.Tenant, Site: cfg.Site,
 		StartedAt: a.started, Log: log, Token: cfg.API.Token,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return a, nil
+}
+
+// ApplyListeners reconciles the running farm with a new listener set.
+//
+// It exists rather than the API calling the farm directly because the runtime
+// options a listener needs -- where SSH host keys live, how the token receiver
+// resolves ids -- are injected here. Applying a manifest without them would
+// produce decoys with fresh host keys on every apply, and a token receiver that
+// cannot look anything up.
+func (a *App) ApplyListeners(listeners []honeyd.ListenerConfig) (added, removed []string, err error) {
+	return a.Farm.Reconcile(a.withRuntimeOptions(listeners))
+}
+
+// withRuntimeOptions fills in the options the process supplies, leaving what
+// the manifest set intact.
+func (a *App) withRuntimeOptions(listeners []honeyd.ListenerConfig) []honeyd.ListenerConfig {
+	out := make([]honeyd.ListenerConfig, len(listeners))
+	copy(out, listeners)
+	for i := range out {
+		opts := map[string]any{}
+		for k, v := range out[i].Options {
+			opts[k] = v
+		}
+		// Host keys live with the deployment state so they survive restarts; a
+		// changing SSH host key is one of the clearest honeypot tells there is.
+		if _, ok := opts["host_key_path"]; !ok {
+			opts["host_key_path"] = filepath.Join(a.Config.DataDir, "hostkeys")
+		}
+		if out[i].Service == "tokens" {
+			opts["lookup"] = honeyd.TokenLookup(a.lookupToken)
+		}
+		out[i].Options = opts
+	}
+	return out
 }
 
 // lookupToken resolves and fires a honeytoken by id.
