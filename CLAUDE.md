@@ -1,0 +1,149 @@
+# MIRAGE — работно състояние и конвенции
+
+> Този файл се чете автоматично в началото на всяка сесия. Той е паметта на
+> проекта: къде сме, какво не бива да се нарушава, какво следва. Ако нещо в
+> него не отговаря на кода — кодът е прав, файлът се обновява.
+
+**Какво е:** платформа за deception (honeypot/honeynet). Пълният план е в
+`docs/`; този файл е оперативното резюме.
+
+**Клон за работа:** `claude/honeypot-software-plan-c9txsh`. Пуш след всеки
+завършен етап.
+
+---
+
+## 1. Състояние към последния commit
+
+Работещ продукт в профил P0 („honeypot в кутия"): един бинар вдига примамки,
+записва всичко в tamper-evident chain, стичва го в engagement-и, вдига аларми
+и го показва в операторска конзола. ~24 500 реда Go, ~6 000 от тях тестове.
+
+```bash
+make build
+./bin/miragectl doctor --config profiles/p0-box.yaml
+./bin/mirage-director --config profiles/p0-box.yaml   # конзола: 127.0.0.1:8422
+```
+
+### Пакети
+
+| Пакет | Какво прави |
+|---|---|
+| `internal/event` | OCSF събитие, ULID, канонична сериализация, **append-only hash chain** |
+| `internal/store` | append-only JSONL evidence, resume след рестарт, стрийм проверка |
+| `internal/bus` | шина, NATS-съвместим subject matching; `Close()` изчаква handler-ите |
+| `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
+| `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
+| `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog`, `elastic` (ECS), `splunk` (HEC) |
+| `internal/driverset` | регистрация на вградените драйвери (отделен пакет заради import cycle) |
+| `internal/honeyd` | фермата: 15 протокола, персони, виртуална ФС, shell, reconcile |
+| `internal/engagement` | стичане на събития в една история; `FromEvents` за офлайн възстановяване |
+| `internal/alert` | праг по severity, дедупликация, линк към engagement, synthetic маркер |
+| `internal/tokens` | honeytokens: 8 типа, callback, watcher, .docx генератор |
+| `internal/ransomware` | шест сигнала за криптор, tarpit, извличане на контакти от бележката |
+| `internal/forge` | генериране на Sigma/Suricata/YARA/STIX + инцидентен доклад |
+| `internal/assure` | самотест на веригата + **Detectability Score** (fingerprint) |
+| `internal/config` | YAML манифест, валидация, `plan` диф, immutable настройки |
+| `internal/app` | сглобяването на едно място (бинарът и e2e тестовете ползват него) |
+| `internal/api` | REST + вградена конзола (`internal/api/web/`) |
+| `cmd/mirage-director`, `cmd/miragectl` | бинарите |
+
+### Протоколи (`internal/honeyd/svc_*.go`)
+
+`ssh` (истински, x/crypto), `ldap` (фалшива AD), `smb` (NetNTLMv2 улов),
+`http`, `telnet`, `ftp` (+ransomware engine), `redis`, `mysql` (верифицира
+подхвърлена парола от скрамбъла), `mssql` (възстановява паролата в чист текст),
+`vnc`, `smtp`, `snmp` (UDP), `modbus` (ICS), `tokens` (callback приемник),
+`generic`.
+
+### Персони (`internal/honeyd/persona_*.go`)
+
+`linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран дял с
+canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS примамки).
+
+---
+
+## 2. Инварианти — не се нарушават
+
+1. **Containment преди функционалност.** Примамка никога не набира навън и
+   никога не изпълнява нищо. `wget`/`ssh`/`nc` в shell-а връщат правдоподобен
+   отказ + IOC събитие. UDP отговорите са ограничени срещу amplification
+   (виж `amplificationSafe` в `server.go`). Има тестове точно за това.
+2. **Нула вендори в ядрото** (ADR-008). Вендорски пакет само в
+   `internal/drivers/<vendor>/`. Всяка категория с ≥2 имплементации —
+   `driverset` тестът го проверява.
+3. **Append-only доказателства.** Събитие веднъж записано не се променя.
+   `store.Verify` открива промяна, изтриване и разместване.
+4. **Нищо не се вмъква като HTML в конзолата** — само текстови възли.
+   UI-ът рендерира съдържание, контролирано от атакуващия.
+5. **Detection изходът е сдържан.** `forge` отказва да прави правило от `ls`
+   или от нормален browser user agent и публикува защо.
+6. **Честност в README.** Ако нещо не е валидирано (SMB файлови операции,
+   VMI), се пише изрично, не се твърди.
+
+---
+
+## 3. Капани, в които вече сме падали
+
+- **`_windows.go` / `_linux.go` са implicit build constraints.** Файлът се
+  компилира само на тази платформа и нищо не се чупи. Има тест-guard:
+  `test/e2e/build_constraints_test.go`.
+- **`pkill -f mirage-director` убива собствената shell сесия**, защото
+  командният ред я съдържа. Ползвай `pgrep -x mirage-director | xargs -r kill`.
+- **Toolchain:** винаги `GOTOOLCHAIN=local` (иначе тегли нов Go).
+- **Port 0 в тестове** е ефемерен и не може да се реконсилира — reconcile
+  тестовете подават явни портове (`freeTestPort`).
+- **`bus.Close()` трябва да изчака** subscriber горутините, иначе handler-и
+  пишат след „stopped cleanly".
+- **`apply` трябва да реинжектира runtime опциите** (host key path, token
+  lookup), иначе новите listener-и се вдигат счупени.
+
+---
+
+## 4. Работен процес
+
+```bash
+GOTOOLCHAIN=local go build ./...
+GOTOOLCHAIN=local go vet ./...
+GOTOOLCHAIN=local gofmt -l $(git ls-files '*.go')
+GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко трябва да е ok
+```
+
+- Тестовете на `internal/honeyd` са бавни (~50s) заради нарочните забавяния
+  при отказана автентикация — това е фийчър, не бъг.
+- Commit съобщения: на български, обясняват **защо**, не какво. Всеки завършен
+  етап се пушва.
+- Всеки нов протокол/фийчър идва с тест, който доказва детекцията, и с тест за
+  containment, ако пипа мрежата.
+
+---
+
+## 5. Какво следва (по приоритет)
+
+1. **Overlay режим (`mirage-presence`, ADR-009)** — Presence Agent поема
+   свободни IP-та в чужд сегмент и тунелира през WireGuard към централните
+   примамки. Това прави внедряването 10-минутно без мрежов проект и отключва
+   MSSP канала. Контролите са в `docs/04 §4а`.
+2. **Пълни VM примамки** — `libvirt`/`proxmox` драйверите съществуват, но
+   нищо не ги ползва. Нужен е provisioner слой, който вдига decoy VM и я
+   свързва с engagement-ите.
+3. **Kerberos KDC** — сега AS-REP/kerberoast се засичат при изброяването през
+   LDAP, не при самото искане на тикет. Истински KDC дава crackable AS-REP и
+   TGS отговори.
+4. **Life Engine** — синтетични потребители, които поддържат примамката жива
+   (логове, lastLogon, нови файлове) докато атакуващият я гледа.
+5. **SMB файлови операции** — за да работи ransomware двигателят и срещу
+   Windows криптори. Изисква валидация срещу истински Windows клиент.
+6. **VMI observer** (DRAKVUF/libvmi) — най-тежкото, изисква хипервайзор.
+7. **Breadcrumbs агент** — подхвърля примамки на реални endpoint-и.
+8. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
+
+Отхвърлени съзнателно (виж `docs/11-IDEAS.md`): hack-back, автоматично
+блокиране на IP към прод firewall, cloud-only контролер.
+
+---
+
+## 6. Документация
+
+`docs/00`–`docs/11` са планът: визия, архитектура, компоненти, каталог на
+измамата, containment/правна рамка, модел на данните, профили на внедряване,
+роудмап, стек, бизнес, интеграции, идеи. `docs/adr/` — решенията с обосновка.
