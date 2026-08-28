@@ -2,6 +2,7 @@ package presence
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,9 +23,10 @@ type AgentSettings struct {
 	// Hub is the address of the MIRAGE hub. The agent always dials out; the
 	// hub never dials in, so the segment the agent sits in is never reachable
 	// from the deception zone.
-	Hub   string `yaml:"hub" json:"hub"`
-	Token string `yaml:"token" json:"token"`
-	ID    string `yaml:"id" json:"id"`
+	Hub   string    `yaml:"hub" json:"hub"`
+	Token string    `yaml:"token" json:"token"`
+	ID    string    `yaml:"id" json:"id"`
+	TLS   TLSConfig `yaml:"tls" json:"tls"`
 
 	// Addresses are the unused IPs in this segment that the agent claims. They
 	// must already exist on the host: the agent binds them, it does not create
@@ -84,6 +86,12 @@ type Agent struct {
 	set AgentSettings
 	log *slog.Logger
 
+	// done is closed by Close. It exists so that shutdown does not have to
+	// wait out a reconnect backoff: without it, stopping an agent that had
+	// just lost its hub took as long as the remaining sleep, which is up to
+	// reconnect_max. An operator who asks a decoy to stop expects it to stop.
+	done chan struct{}
+
 	mu        sync.Mutex
 	listeners []net.Listener
 	tunnel    *tunnel
@@ -102,7 +110,11 @@ func NewAgent(set AgentSettings, log *slog.Logger) (*Agent, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Agent{set: set, log: log, permitted: map[string]bool{}}, nil
+	return &Agent{
+		set: set, log: log,
+		permitted: map[string]bool{},
+		done:      make(chan struct{}),
+	}, nil
 }
 
 // Run binds the claimed addresses and keeps a tunnel to the hub until the
@@ -117,7 +129,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		defer a.wg.Done()
 		a.maintain(ctx)
 	}()
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-a.done:
+	}
 	return a.Close()
 }
 
@@ -249,6 +264,8 @@ func (a *Agent) maintain(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-a.done:
+			return
 		default:
 		}
 		if err := a.connect(ctx); err != nil {
@@ -263,10 +280,15 @@ func (a *Agent) maintain(ctx context.Context) {
 			return
 		}
 
+		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(backoff):
+		case <-a.done:
+			timer.Stop()
+			return
+		case <-timer.C:
 		}
 		backoff *= 2
 		if backoff > a.set.ReconnectMax {
@@ -277,8 +299,38 @@ func (a *Agent) maintain(ctx context.Context) {
 
 // connect opens one tunnel and carries it until it fails.
 func (a *Agent) connect(ctx context.Context) error {
+	// A dial and a handshake both block, and Close must not have to wait for
+	// either: cancel them the moment the agent is asked to stop.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go func() {
+		select {
+		case <-a.done:
+			cancel()
+		case <-stopWatch:
+		}
+	}()
+
 	d := net.Dialer{Timeout: 15 * time.Second}
-	conn, err := d.DialContext(ctx, "tcp", a.set.Hub)
+	var conn net.Conn
+	var err error
+	if a.set.TLS.Enabled() {
+		tlsCfg, cfgErr := a.set.TLS.ClientConfig()
+		if cfgErr != nil {
+			return cfgErr
+		}
+		if tlsCfg.ServerName == "" {
+			host, _, splitErr := net.SplitHostPort(a.set.Hub)
+			if splitErr == nil {
+				tlsCfg.ServerName = host
+			}
+		}
+		conn, err = (&tls.Dialer{NetDialer: &d, Config: tlsCfg}).DialContext(ctx, "tcp", a.set.Hub)
+	} else {
+		conn, err = d.DialContext(ctx, "tcp", a.set.Hub)
+	}
 	if err != nil {
 		return err
 	}
@@ -326,6 +378,14 @@ func (a *Agent) connect(ctx context.Context) error {
 
 	t := newTunnel(conn, true)
 	a.mu.Lock()
+	if a.closed {
+		// Close ran while the handshake was in flight; the tunnel it saw was
+		// the previous one, so this one has to clean up after itself or it
+		// would outlive the agent that owns it.
+		a.mu.Unlock()
+		t.Close()
+		return errors.New("presence: agent is closing")
+	}
 	a.tunnel = t
 	a.permitted = permitted
 	a.connected = true
@@ -397,6 +457,7 @@ func (a *Agent) Close() error {
 		return nil
 	}
 	a.closed = true
+	close(a.done)
 	listeners := a.listeners
 	t := a.tunnel
 	a.listeners = nil

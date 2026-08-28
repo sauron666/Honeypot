@@ -15,3 +15,12 @@ web/dist/
 *.pcapng
 *.dmp
 evidence/
+/data/
+*.jsonl
+
+# PKI за overlay тунела. ca.key дава право да се изсече агент, на когото
+# хъбът вярва — не бива да попада в git по никакъв повод.
+presence-pki/
+*.key
+*.crt
+*.pem

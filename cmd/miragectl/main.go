@@ -23,6 +23,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/forge"
 	"github.com/sauron666/Honeypot/internal/honeyd"
+	"github.com/sauron666/Honeypot/internal/presence"
 	"github.com/sauron666/Honeypot/internal/store"
 	"github.com/sauron666/Honeypot/internal/version"
 )
@@ -44,6 +45,7 @@ commands:
   apply       reconcile a running director with a manifest, without a restart
   fingerprint score how identifiable each decoy is, and say what gives it away
   assure      run the self-test: attack the deployment and verify it detected it
+  presence-ca issue the mutual-TLS material for the overlay hub and its agents
   status      query a running director over its API
   version     print the version
 
@@ -84,6 +86,8 @@ func main() {
 		err = fingerprintCmd(args)
 	case "assure":
 		err = assureCmd(args)
+	case "presence-ca":
+		err = presenceCA(args)
 	case "status":
 		err = status(args)
 	case "version":
@@ -757,4 +761,67 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// presenceCA issues the certificates the overlay needs.
+//
+// It exists because mutual TLS that requires a separate PKI project first is
+// mutual TLS nobody turns on, and an unencrypted overlay carries the agent
+// token in clear text across someone else's network.
+func presenceCA(args []string) error {
+	fs := flag.NewFlagSet("presence-ca", flag.ExitOnError)
+	dir := fs.String("dir", "presence-pki", "directory to write the material to")
+	hosts := fs.String("hosts", "",
+		"comma-separated names and addresses agents use to reach the hub (required)")
+	agents := fs.String("agents", "", "comma-separated agent ids to issue certificates for (required)")
+	days := fs.Int("days", 730, "how long the agent and hub certificates are valid")
+	fs.Parse(args)
+
+	if *hosts == "" || *agents == "" {
+		return fmt.Errorf("both -hosts and -agents are required; " +
+			"the hosts become the hub certificate's SANs and the agents its clients")
+	}
+	files, err := presence.PKI{
+		Dir:      *dir,
+		Hosts:    splitList(*hosts),
+		Agents:   splitList(*agents),
+		Validity: time.Duration(*days) * 24 * time.Hour,
+	}.Generate()
+	if err != nil {
+		return err
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ROLE\tKIND\tPATH")
+	for _, f := range files {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", f.Role, f.Kind, f.Path)
+	}
+	w.Flush()
+
+	fmt.Printf(`
+Hub configuration:
+
+  presence:
+    tls:
+      cert_file: %s
+      key_file: %s
+      ca_file: %s
+
+Each agent gets ca.crt and its own pair, and nothing else. ca.key never leaves
+this machine: whoever holds it can mint an agent the hub will trust.
+`,
+		filepath.Join(*dir, "hub.crt"),
+		filepath.Join(*dir, "hub.key"),
+		filepath.Join(*dir, "ca.crt"))
+	return nil
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

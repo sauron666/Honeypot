@@ -44,7 +44,7 @@ make build
 | `internal/assure` | самотест на веригата + **Detectability Score** (fingerprint) |
 | `internal/config` | YAML манифест, валидация, `plan` диф, immutable настройки |
 | `internal/app` | сглобяването на едно място (бинарът и e2e тестовете ползват него) |
-| `internal/presence` | overlay: хъб + Presence Agent, тунел с мултиплексиране |
+| `internal/presence` | overlay: хъб + Presence Agent, тунел с мултиплексиране, взаимен TLS + собствен CA (`ca.go`) |
 | `internal/api` | REST + вградена конзола (`internal/api/web/`) |
 | `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence` | бинарите |
 
@@ -104,6 +104,18 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
   който вече е пристигнал, се губи, защото peer-ът отговаря и затваря наведнъж.
 - **`Hub.Close()` трябва да затвори и приетите сокети**, не само listener-а,
   иначе изчаква дълги read deadline-и.
+- **`streamConn` трябва да спазва deadline-ите.** Всяка емулирана услуга слага
+  read deadline, за да изхвърли атакуващ, който мълчи. Докато `SetDeadline`
+  беше no-op, тунелирана сесия висеше, докато атакуващият държи сокета, и
+  тунелът свършваше поточните id-та. `Read` селектира върху данни, таймер и
+  `wake` канал, който `SetDeadline` затваря — иначе вече блокиран `Read` не
+  вижда новия срок (net.Conn обещава, че го вижда).
+- **`Agent.Close()` не бива да чака backoff-а.** Без `done` канал спирането на
+  агент, който току-що е загубил хъба, отнемаше цял `reconnect_max`. Тестът
+  `TestAgentFailsClosedWhenTheTunnelIsDown` падна от 20s на под секунда.
+- **TLS ръкостискането се прави явно в `serveAgent`.** Оставено на първия
+  `Read`, проблем със сертификат излиза като „връзката не започна с hello",
+  което праща човека, който вдига mTLS, точно в грешната посока.
 
 ---
 
@@ -127,21 +139,19 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
 
 ## 5. Какво следва (по приоритет)
 
-1. **TLS за overlay тунела** — сега е нешифрован TCP, предвиден да минава през
-   съществуващ VPN. Взаимен TLS с certificate pinning е правилното следващо нещо.
-2. **Пълни VM примамки** — `libvirt`/`proxmox` драйверите съществуват, но
+1. **Пълни VM примамки** — `libvirt`/`proxmox` драйверите съществуват, но
    нищо не ги ползва. Нужен е provisioner слой, който вдига decoy VM и я
    свързва с engagement-ите.
-3. **Kerberos KDC** — сега AS-REP/kerberoast се засичат при изброяването през
+2. **Kerberos KDC** — сега AS-REP/kerberoast се засичат при изброяването през
    LDAP, не при самото искане на тикет. Истински KDC дава crackable AS-REP и
    TGS отговори.
-4. **Life Engine** — синтетични потребители, които поддържат примамката жива
+3. **Life Engine** — синтетични потребители, които поддържат примамката жива
    (логове, lastLogon, нови файлове) докато атакуващият я гледа.
-5. **SMB файлови операции** — за да работи ransomware двигателят и срещу
+4. **SMB файлови операции** — за да работи ransomware двигателят и срещу
    Windows криптори. Изисква валидация срещу истински Windows клиент.
-6. **VMI observer** (DRAKVUF/libvmi) — най-тежкото, изисква хипервайзор.
-7. **Breadcrumbs агент** — подхвърля примамки на реални endpoint-и.
-8. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
+5. **VMI observer** (DRAKVUF/libvmi) — най-тежкото, изисква хипервайзор.
+6. **Breadcrumbs агент** — подхвърля примамки на реални endpoint-и.
+7. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
 
 Отхвърлени съзнателно (виж `docs/11-IDEAS.md`): hack-back, автоматично
 блокиране на IP към прод firewall, cloud-only контролер.

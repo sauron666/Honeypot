@@ -39,6 +39,24 @@ presence:
   # Rotate this per customer in a real deployment; it is the only thing between
   # someone on that segment and the ability to project decoys into the platform.
   token: change-me-per-customer
+
+  # Mutual TLS. Issue the material with:
+  #
+  #   miragectl presence-ca -dir /etc/mirage/presence-pki \
+  #       -hosts mirage-hub.example.net -agents acme-floor-3,acme-dmz,acme-datacentre
+  #
+  # ca_file here is the CA that signs agent certificates: with it set, an agent
+  # without one is refused before it can offer a token, so a token read off a
+  # compromised agent is not enough to project decoys of someone's own. Each
+  # agent gets ca.crt and its own pair; ca.key stays on the hub.
+  #
+  # Without this block the tunnel is plain TCP: the token and everything an
+  # attacker types into a decoy cross the customer's network in clear text.
+  tls:
+    cert_file: /etc/mirage/presence-pki/hub.crt
+    key_file: /etc/mirage/presence-pki/hub.key
+    ca_file: /etc/mirage/presence-pki/ca.crt
+
   agents:
     - id: acme-floor-3
       decoy_id: dcy-acme-fs01

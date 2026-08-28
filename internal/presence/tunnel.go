@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -118,22 +119,28 @@ func (t *tunnel) Close() error {
 
 // streamConn is one tunnelled connection, presented as a net.Conn so that both
 // the decoy farm and the agent's forwarder can treat it as an ordinary socket.
+//
+// "Ordinary" has to include deadlines. Every emulated service sets a read
+// deadline so that an attacker who connects and says nothing is eventually
+// dropped; a stream that ignored them would hold a goroutine, a session and a
+// stream id for as long as the attacker cared to keep the socket open, and the
+// tunnel would run out of streams long before anyone noticed.
 type streamConn struct {
 	t      *tunnel
 	id     uint32
 	local  net.Addr
 	remote net.Addr
 
-	pr *io.PipeReader
-	pw *io.PipeWriter
+	// in carries what the peer sent, so that delivery never blocks the shared
+	// frame reader. Handing bytes straight to the consumer would deadlock the
+	// whole tunnel: the reader would wait for one slow consumer while the peer
+	// waits for us to read, and both sides stop. This is the classic
+	// head-of-line failure of a multiplexer without flow control.
+	in chan []byte
 
-	// in buffers what the peer sent, so that delivery never blocks the shared
-	// frame reader. Handing bytes straight to the pipe would deadlock the whole
-	// tunnel: the reader would wait for one slow consumer while the peer waits
-	// for us to read, and both sides stop. This is the classic head-of-line
-	// failure of a multiplexer without flow control.
-	in     chan []byte
-	pumpWG sync.WaitGroup
+	// readMu serialises readers; readBuf holds what one Read could not take.
+	readMu  sync.Mutex
+	readBuf []byte
 
 	once      sync.Once
 	closeOnce sync.Once
@@ -141,6 +148,9 @@ type streamConn struct {
 	mu       sync.Mutex
 	inClosed bool
 	deadline time.Time
+	// wake is closed and replaced whenever the deadline changes, so that a
+	// Read already blocked picks the new deadline up. net.Conn promises this.
+	wake chan struct{}
 }
 
 // streamBuffer is how many chunks may be queued for one stream before it is
@@ -149,25 +159,11 @@ type streamConn struct {
 const streamBuffer = 16
 
 func newStream(t *tunnel, id uint32, local, remote net.Addr) *streamConn {
-	pr, pw := io.Pipe()
-	s := &streamConn{
-		t: t, id: id, local: local, remote: remote, pr: pr, pw: pw,
-		in: make(chan []byte, streamBuffer),
+	return &streamConn{
+		t: t, id: id, local: local, remote: remote,
+		in:   make(chan []byte, streamBuffer),
+		wake: make(chan struct{}),
 	}
-	s.pumpWG.Add(1)
-	go s.pump()
-	return s
-}
-
-// pump moves buffered data into the pipe the consumer reads from.
-func (s *streamConn) pump() {
-	defer s.pumpWG.Done()
-	for b := range s.in {
-		if _, err := s.pw.Write(b); err != nil {
-			return
-		}
-	}
-	s.pw.Close()
 }
 
 // deliver queues data from the peer without ever blocking the frame reader.
@@ -190,9 +186,73 @@ func (s *streamConn) deliver(b []byte) {
 	}
 }
 
-func (s *streamConn) Read(b []byte) (int, error) { return s.pr.Read(b) }
+func (s *streamConn) Read(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+
+	for {
+		if len(s.readBuf) > 0 {
+			n := copy(b, s.readBuf)
+			s.readBuf = s.readBuf[n:]
+			if len(s.readBuf) == 0 {
+				s.readBuf = nil
+			}
+			return n, nil
+		}
+
+		s.mu.Lock()
+		deadline := s.deadline
+		wake := s.wake
+		s.mu.Unlock()
+
+		var timeout <-chan time.Time
+		var timer *time.Timer
+		if !deadline.IsZero() {
+			left := time.Until(deadline)
+			if left <= 0 {
+				return 0, os.ErrDeadlineExceeded
+			}
+			// Stopped on every path out of this iteration rather than
+			// deferred: a stream whose deadline is pushed forward on each
+			// read would otherwise pile up one live timer per iteration.
+			timer = time.NewTimer(left)
+			timeout = timer.C
+		}
+
+		select {
+		case chunk, ok := <-s.in:
+			stopTimer(timer)
+			// A closed channel still hands over what was already queued, so
+			// the last thing the peer said arrives before the EOF does.
+			if !ok {
+				return 0, io.EOF
+			}
+			s.readBuf = chunk
+		case <-timeout:
+			return 0, os.ErrDeadlineExceeded
+		case <-wake:
+			stopTimer(timer)
+			// The deadline moved; work out the new one and wait again.
+		}
+	}
+}
+
+func stopTimer(t *time.Timer) {
+	if t != nil {
+		t.Stop()
+	}
+}
 
 func (s *streamConn) Write(b []byte) (int, error) {
+	s.mu.Lock()
+	closed := s.inClosed
+	s.mu.Unlock()
+	if closed {
+		return 0, net.ErrClosed
+	}
 	written := 0
 	for len(b) > 0 {
 		chunk := b
@@ -219,17 +279,16 @@ func (s *streamConn) Close() error {
 
 // closeLocal releases the stream without notifying the peer, for when the peer
 // is the one that closed it.
+//
+// It closes only the inbound channel. A reader still drains whatever was
+// queued and sees EOF after it -- the peer routinely answers and closes in the
+// same breath, and discarding the buffer here would lose the answer.
 func (s *streamConn) closeLocal() {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.inClosed = true
 		close(s.in)
 		s.mu.Unlock()
-		// The pump drains what is already queued and then closes the writer,
-		// so the reader sees the remaining bytes and only then EOF. Closing the
-		// reader here instead would discard a response that had already
-		// arrived -- the peer answers and closes in the same breath, and the
-		// close would win the race.
 		s.t.remove(s.id)
 	})
 }
@@ -237,13 +296,15 @@ func (s *streamConn) closeLocal() {
 func (s *streamConn) LocalAddr() net.Addr  { return s.local }
 func (s *streamConn) RemoteAddr() net.Addr { return s.remote }
 
-// SetDeadline and friends are advisory here: the tunnel enforces its own
-// timeouts, and a stream that outlives them dies with it. Services call these,
-// so they must not fail.
+// SetDeadline applies to reads. Writes go out as frames on the shared socket,
+// which carries its own write deadline, so a per-stream write deadline would
+// promise something this transport cannot deliver.
 func (s *streamConn) SetDeadline(t time.Time) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.deadline = t
+	close(s.wake)
+	s.wake = make(chan struct{})
+	s.mu.Unlock()
 	return nil
 }
 

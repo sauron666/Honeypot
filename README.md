@@ -98,6 +98,28 @@ Deception-as-Code — виж какво ще се промени, преди д�
 публикува число. `fingerprint` дава число за всяка примамка, конкретното нещо,
 което я издава, и какво да се направи по въпроса.
 
+Overlay режим — примамки в чужд сегмент без нито една промяна по мрежата.
+Агентът поема свободни адреси там, където е, и тунелира всичко до хъба; VLAN,
+маршрути и firewall правила остават каквито са. Тунелът е с **взаимен TLS**,
+а материалът се издава от самия MIRAGE, защото функция, която изисква отделен
+PKI проект, преди да тръгне, е функция, която остава изключена:
+
+```bash
+./bin/miragectl presence-ca -dir ./presence-pki \
+    -hosts mirage-hub.example.net -agents acme-floor-3
+
+# на хъба: presence.tls.{cert_file,key_file,ca_file} в профила
+# в чуждия сегмент (агентът получава само ca.crt и своята двойка):
+MIRAGE_PRESENCE_TOKEN=... ./bin/mirage-presence \
+    -hub mirage-hub.example.net:8443 -id acme-floor-3 \
+    -addresses 10.20.30.41 -services ssh:22,smb:445 \
+    -tls-cert agent-acme-floor-3.crt -tls-key agent-acme-floor-3.key -tls-ca ca.crt
+```
+
+С `ca_file` на хъба агент без сертификат се отрязва, преди изобщо да подаде
+токен: токен, прочетен от компрометиран агент, не стига, за да проектира някой
+свои примамки. `ca.key` не напуска хъба.
+
 И най-важното — примамката пише детекциите за реалната мрежа:
 
 ```bash
@@ -114,7 +136,7 @@ Deception-as-Code — виж какво ще се промени, преди д�
 | `internal/bus` | шина със subject matching; бавен consumer не блокира примамка |
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
 | `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
-| `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424) |
+| `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424), `elastic`, `splunk` |
 | `internal/honeyd` | 15 протокола: **ssh** (истински), **ldap** (фалшив AD), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
 | `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран дял с canary файлове), `windows/dc` (фалшива AD с kerberoast/AS-REP/ADCS/LAPS примамки) |
 | `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
@@ -123,10 +145,10 @@ Deception-as-Code — виж какво ще се промени, преди д�
 | `internal/ransomware` | **шест независими сигнала за криптор + tarpit + извличане на контактите от бележката** |
 | `internal/engagement` | стичване на събития в една история + risk score; възстановяване от evidence файл |
 | `internal/alert` | праг по severity, дедупликация, линк към engagement |
-| `internal/presence` | **overlay режим**: примамки в чужд сегмент без промяна на мрежата |
+| `internal/presence` | **overlay режим**: примамки в чужд сегмент без промяна на мрежата; **взаимен TLS** + собствен CA |
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
 | `cmd/mirage-presence` | Presence Agent — поема свободни адреси и тунелира към хъба |
-| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, status |
+| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, **presence-ca**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
 (`test/e2e`), всичко под `-race`.
@@ -137,9 +159,6 @@ Deception-as-Code — виж какво ще се промени, преди д�
 но нищо още не ги ползва), няма Kerberos KDC (AS-REP и
 kerberoast се засичат при изброяването през LDAP, не при самото искане на
 тикет), няма Life Engine (синтетични потребители).
-
-Overlay тунелът е нешифрован TCP — предвиден е да минава през съществуващ
-VPN или WireGuard между площадките. TLS в самия протокол е следващата стъпка.
 
 SMB покрива negotiate, session setup (с улов на NetNTLMv2) и tree connect;
 файловите операции връщат ACCESS_DENIED. Сервирането на файлове по SMB2

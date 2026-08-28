@@ -3,6 +3,7 @@ package presence
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,7 @@ type AgentConfig struct {
 type HubConfig struct {
 	Listen string        `yaml:"listen" json:"listen"`
 	Token  string        `yaml:"token" json:"token"`
+	TLS    TLSConfig     `yaml:"tls" json:"tls"`
 	Agents []AgentConfig `yaml:"agents" json:"agents"`
 }
 
@@ -119,6 +121,21 @@ func (h *Hub) Start(ctx context.Context) error {
 	ln, err := net.Listen("tcp", h.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("presence: listen %s: %w", h.cfg.Listen, err)
+	}
+	if h.cfg.TLS.Enabled() {
+		tlsCfg, err := h.cfg.TLS.ServerConfig()
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		ln = tls.NewListener(ln, tlsCfg)
+		h.log.Info("presence hub requires TLS",
+			"mutual", h.cfg.TLS.CAFile != "")
+	} else {
+		// Saying this plainly matters: the tunnel carries attacker traffic and
+		// the agent's token, and both are readable on the path without TLS.
+		h.log.Warn("presence hub is running without TLS; " +
+			"run it only inside an existing VPN or WireGuard tunnel")
 	}
 	h.mu.Lock()
 	h.ln = ln
@@ -232,6 +249,21 @@ func (h *Hub) serveAgent(ctx context.Context, conn net.Conn) {
 	}()
 
 	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+
+	// Handshake explicitly so that a certificate problem is reported as one.
+	// Left to the first Read it surfaces as "the connection did not start with
+	// a hello", which sends whoever is deploying mutual TLS looking in exactly
+	// the wrong place.
+	if tc, ok := conn.(*tls.Conn); ok {
+		if err := tc.HandshakeContext(ctx); err != nil {
+			h.log.Warn("presence: TLS handshake failed",
+				"remote", conn.RemoteAddr(), "err", err,
+				"hint", "the agent needs a certificate from this hub's CA, "+
+					"and the hub certificate must name the address the agent dials")
+			return
+		}
+	}
+
 	frame, err := ReadFrame(conn)
 	if err != nil || frame.Type != FrameHello {
 		h.log.Warn("presence: connection did not start with a hello", "remote", conn.RemoteAddr(), "err", err)

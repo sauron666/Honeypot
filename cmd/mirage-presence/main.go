@@ -43,8 +43,13 @@ func run() error {
 		id        = flag.String("id", "", "agent id, as declared on the hub")
 		addresses = flag.String("addresses", "", "comma-separated addresses to claim")
 		services  = flag.String("services", "", "comma-separated service:port pairs, e.g. ssh:22,http:80")
-		logLevel  = flag.String("log-level", "info", "debug, info, warn or error")
-		showVer   = flag.Bool("version", false, "print version and exit")
+		tlsCert   = flag.String("tls-cert", "", "this agent's certificate (from miragectl presence-ca)")
+		tlsKey    = flag.String("tls-key", "", "this agent's private key")
+		tlsCA     = flag.String("tls-ca", "", "CA that signed the hub's certificate")
+		tlsName   = flag.String("tls-server-name", "",
+			"name to expect on the hub certificate (default: the host in -hub)")
+		logLevel = flag.String("log-level", "info", "debug, info, warn or error")
+		showVer  = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
 
@@ -80,6 +85,18 @@ func run() error {
 	if env := os.Getenv("MIRAGE_PRESENCE_TOKEN"); env != "" {
 		set.Token = env
 	}
+	if *tlsCert != "" {
+		set.TLS.CertFile = *tlsCert
+	}
+	if *tlsKey != "" {
+		set.TLS.KeyFile = *tlsKey
+	}
+	if *tlsCA != "" {
+		set.TLS.CAFile = *tlsCA
+	}
+	if *tlsName != "" {
+		set.TLS.ServerName = *tlsName
+	}
 	if *addresses != "" {
 		set.Addresses = splitList(*addresses)
 	}
@@ -99,9 +116,18 @@ func run() error {
 		return err
 	}
 
+	if !set.TLS.Enabled() {
+		// The tunnel carries the token and everything an attacker says to the
+		// decoy. Without TLS both are readable by anyone on the path between
+		// this segment and the hub.
+		log.Warn("presence agent has no TLS configured; " +
+			"run it only inside an existing VPN, or issue material with 'miragectl presence-ca'")
+	}
+
 	log.Info("starting presence agent",
 		"version", version.Version, "hub", set.Hub, "id", set.ID,
-		"addresses", len(set.Addresses), "services", len(set.Services))
+		"addresses", len(set.Addresses), "services", len(set.Services),
+		"tls", set.TLS.Enabled())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

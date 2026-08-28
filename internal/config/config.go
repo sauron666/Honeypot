@@ -335,6 +335,14 @@ func (c *Config) validatePresence() error {
 			}
 		}
 	}
+	// Load the TLS material now rather than at the first connection: a hub
+	// that starts and then refuses every agent because of a path typo is a
+	// deployment that looks healthy and records nothing.
+	if c.Presence.TLS.Enabled() {
+		if _, err := c.Presence.TLS.ServerConfig(); err != nil {
+			return fmt.Errorf("config: presence.tls: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -476,6 +484,14 @@ func (c *Config) Warnings() []string {
 		host, _, _ := strings.Cut(c.Presence.Listen, ":")
 		if host == "127.0.0.1" || host == "localhost" {
 			w = append(w, "the presence hub is bound to loopback: agents in other segments will not reach it")
+		}
+		if !c.Presence.TLS.Enabled() {
+			w = append(w, "the presence hub has no TLS: the agent token and everything an attacker "+
+				"types into a decoy cross the network in clear text "+
+				"(issue material with 'miragectl presence-ca')")
+		} else if c.Presence.TLS.CAFile == "" {
+			w = append(w, "the presence hub encrypts but does not verify agents: without presence.tls.ca_file "+
+				"the shared token is the only thing an attacker needs to project decoys of their own")
 		}
 	}
 	privileged := 0
