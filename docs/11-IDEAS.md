@@ -59,7 +59,13 @@
 | 17 Engagement Economics | ✅ готово | `internal/engagement`, `miragectl economics` |
 | 14 Watermarking (невидимо проследяване на изтичане) | ✅ готово (3 техники + extract) | `internal/watermark` |
 | 16 Compliance evidence (NIS2/DORA/ISO/PCI/SOC2/IEC) | ✅ готово | `internal/compliance` |
-| 11–20 (останалите) | ✗ по-нататъшни фази | — |
+| 13 Insider-threat режим | ✅ готово (генератор + DPIA + policy) | `internal/insider` |
+| — NACDriver (FreeRADIUS CoA) | ✅ готово | `internal/drivers/nac` |
+| — SSH session replay (asciinema v2) | ✅ готово | `internal/replay` |
+| — Fleet rotation (авто-ротация на идентичности) | ✅ готово | `internal/fleet` |
+| — STIX 2.1 export + TheHive + IOC list | ✅ готово | `internal/export` |
+| — Golden templates (Packer + cloud-init) | ✅ готово | `templates/` |
+| 11,12,18,19,20 (останалите) | ✗ бъдещи фази | — |
 
 ★ = диференциатор, който конкурентите нямат.
 

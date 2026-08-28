@@ -27,7 +27,7 @@
 - [x] `ObserverDriver`: `none` + `drakvuf` (parsing/mapping готови, hypervisor-glue остава)
 - [x] `mirage-director` v0: REST API, evidence pipeline, конзола
 - [x] `mirage-ui` v0: engagements, събития, детайл, session transcript, verify
-- [ ] Golden template: `deb12-web` (Packer) — липсва
+- [x] Golden template: `deb12-web` (Packer + cloud-init за Proxmox/libvirt)
 - [ ] `mirage-tap` v0: pcap + Suricata EVE ingest — отложен
 
 ---
@@ -44,8 +44,8 @@
 - [x] **`mirage-forge`**: авто-Sigma/Suricata/YARA/STIX + инцидентен доклад
 - [x] **Профил P0 "honeypot в кутия"**: `make build && ./bin/mirage-director`
 - [x] `ComputeDriver: proxmox` (Proxmox VE през pvesh CLI)
-- [ ] SSH/PTY session replay в UI — липсва
-- [ ] Export: STIX 2.1 → MISP; TheHive alert — отложен
+- [x] SSH/PTY session replay (`internal/replay`, asciinema v2 формат)
+- [x] STIX 2.1 export + TheHive alert + IOC list (`internal/export`)
 
 ---
 
@@ -83,9 +83,9 @@
 - [x] **Just-in-Time примамки** (`internal/honeyd/jit.go`): реактивно вдигане при сканиране
 - [x] **Watermarking** (`internal/watermark`): 3 техники (zero-width, whitespace, visible DocID) + extract
 - [x] **Engagement Economics** (`miragectl economics`): ROI метрика — attacker hours, confirmed incidents, top techniques
-- [ ] NACDriver: RADIUS CoA + FreeRADIUS — отложен
-- [ ] Insider-threat режим + шаблон за политика/DPIA — отложен
-- [ ] Fleet rotation, burn tracking — частично (burn tracking е в farm)
+- [x] NACDriver: FreeRADIUS RADIUS CoA (`internal/drivers/nac`)
+- [x] Insider-threat режим + DPIA + policy шаблони (`internal/insider`)
+- [x] Fleet rotation (`internal/fleet`) + burn tracking (`internal/farm`)
 
 ---
 
