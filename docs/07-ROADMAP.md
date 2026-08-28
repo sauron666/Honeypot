@@ -63,7 +63,8 @@
       (за vSphere/Hyper-V/cloud, където няма VMI)
 - [ ] Windows golden templates (Win10/11, Server 2019/2022) + domain join
 - [ ] Escalation Broker: прозрачен L1 → L3 handoff
-- [ ] RDP видео реконструкция, SMB/DCERPC/WinRM реконструктори
+- [~] SMB2: negotiate, session setup с NetNTLMv2 улов, tree connect (файловите операции и DCERPC/WinRM остават)
+- [ ] RDP видео реконструкция
 - [ ] Anti-fingerprinting pass #1 (SMBIOS/DMI, CPUID, дискови модели, MAC OUI)
 - [ ] `mirage-breadcrumbs` агент v1 (Windows/Linux) + Velociraptor artifacts
 - [ ] **`mirage-presence` — overlay режим** (WireGuard, ARP takeover) ★

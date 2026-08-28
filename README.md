@@ -95,7 +95,7 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
 | `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424) |
-| `internal/honeyd` | 12 протокола: **ssh** (истински), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **generic** |
+| `internal/honeyd` | 14 протокола: **ssh** (истински), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
 | `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран файлов дял с canary файлове) |
 | `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
 | `internal/forge` | **автогенериране на Sigma / Suricata / YARA / STIX + инцидентен доклад** |
@@ -110,9 +110,13 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 
 ## Какво НЕ работи още
 
-Няма VMI observer, няма пълни VM примамки, няма SMB, няма identity/AD deception,
-няма Life Engine (синтетични потребители), няма overlay режим. Ransomware
-двигателят работи през FTP; при SMB ще хваща и Windows криптори. Пътната карта и редът на изпълнение: `docs/07-ROADMAP.md`.
+Няма VMI observer, няма пълни VM примамки, няма identity/AD deception, няма
+Life Engine (синтетични потребители), няма overlay режим.
+
+SMB покрива negotiate, session setup (с улов на NetNTLMv2) и tree connect;
+файловите операции връщат ACCESS_DENIED. Сервирането на файлове по SMB2
+изисква валидация срещу истински Windows клиенти, преди да е честно да се
+твърди — затова ransomware двигателят засега гледа FTP дяла. Пътната карта и редът на изпълнение: `docs/07-ROADMAP.md`.
 
 ## Статус
 

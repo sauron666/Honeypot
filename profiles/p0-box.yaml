@@ -82,6 +82,11 @@ honeyd:
           port: 2123
         - service: ssh
           port: 2225
+        # SMB. The NTLM exchange yields a NetNTLMv2 hash in the format hashcat
+        # expects, plus the attacker's workstation name -- which survives their
+        # IP rotating. Redirect 445 here at the firewall.
+        - service: smb
+          port: 4445
 
     # An industrial decoy. A PLC cannot run an agent, which makes a passive
     # decoy the only detection some plants can have at all.
