@@ -31,6 +31,51 @@
 Приоритет: **1, 2, 3, 7** възможно най-рано (те правят продукта универсален и
 внедрим). **4, 5, 6, 9, 10** са това, което няма никой друг.
 
+### Състояние на реализацията (към последния commit)
+
+Кодът е правото; ако тази таблица изостане, кодът печели. Пакетите са в
+`CLAUDE.md §1`.
+
+| Идея / компонент | Състояние | Къде |
+|---|---|---|
+| 1 Deception-as-Code (plan/apply без рестарт) | ✅ готово | `internal/config`, `miragectl plan/apply` |
+| 2 Персони | ✅ готово (5 персони); Deception Packs още не | `internal/honeyd/persona_*` |
+| 3 Overlay режим + взаимен TLS + собствен CA | ✅ готово | `internal/presence`, `miragectl presence-ca` |
+| 5 Fingerprint Assurance (Detectability Score) | ✅ готово | `internal/assure`, `miragectl fingerprint` |
+| 7 Deception Assurance (синтетичен атакуващ) | ✅ готово | `internal/assure`, `miragectl assure` |
+| — Пълни VM примамки + containment gate + burn | ✅ готово (образи/proxmox драйвер не) | `internal/farm`, `internal/drivers/fabric`, профил P4 |
+| — Истински Kerberos KDC (roast/spray/enum, crackable) | ✅ готово | `internal/honeyd/svc_kerberos.go` |
+| — Синтетичен живот (обитаемост във времето) | ✅ готово | `internal/life` |
+| — Breadcrumbs (следи на реални endpoint-и) ★ ново | ✅ готово | `internal/breadcrumbs`, `cmd/mirage-breadcrumbs` |
+| 4/ADR-004 VMI observer (agentless) | ◐ наполовина: parsing/mapping готови, hypervisor-glue остава | `internal/drivers/observer`, `docs/adr/ADR-010` |
+| 4 Attack Path Deception (`mirage-graph`) | ✗ следващо; изисква реална среда | — |
+| 6 Just-in-Time примамки | ✗ | — |
+| 8 Attacker Toolkit DB + предсказване | ✗ | — |
+| 9 Deception за AI агенти / MCP ★ | ✗ (нова повърхност, никой не я покрива) | — |
+| 10 Supply-chain / DevOps deception | частично: Breadcrumbs покрива CI/endpoint следи | `internal/breadcrumbs` |
+| 11–20 | ✗ по-нататъшни фази | — |
+
+★ = диференциатор, който конкурентите нямат.
+
+### Идеи, които се появиха при писането (добавени към каталога)
+
+- **Breadcrumbs / обратна измама** — вместо да чакаме атакуващия да намери
+  примамка, засяваме реалните endpoint-и със следи, водещи в honeynet-а. Всяка
+  следа носи honeytoken и е обратима. (Реализирано.)
+- **Синтетичен живот като чиста функция на времето** — обитаемостта не е
+  горутина, която мутира състояние (races, метроном-tell), а `f(seed, now)`.
+  Стабилна между четения, напредва във времето, не емитира събития. (Реализирано.)
+- **Двойна проверка на containment: намерение срещу реалност** — `nftables`
+  чете правилата, `probe` тества какво реално стига пакет. Разминаването между
+  двете е точно опасното внедряване. (Реализирано.)
+- **Bait, който е crackable по дизайн** — planирана парола с формата, който
+  хората избират, за да успее офлайн кракът; стойността е в reuse-а, който
+  watcher-ът свързва. Принцип за всяка бъдеща identity примамка. (Реализирано за
+  Kerberos.)
+- **Изгорената примамка е доказателство, не боклук** — не се рециклира, не се
+  трие при reconcile, не изчезва при махане от манифеста. Принцип за целия
+  жизнен цикъл на VM примамките. (Реализирано.)
+
 ---
 
 ## 1. Deception-as-Code + GitOps
