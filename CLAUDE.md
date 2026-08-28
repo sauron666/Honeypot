@@ -55,7 +55,17 @@ make build
 | `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI; parsing/mapping готово и тествано, hypervisor-glue остава — виж ADR-010) |
 | `internal/api` | REST + вградена конзола (`internal/api/web/`) |
 | `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
-| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите |
+| `internal/drivers/nac` | `none` (честен no-op) + `freeradius` (RADIUS CoA — насочва непознато устройство към deception VLAN вместо да го блокира) |
+| `internal/graph` | `mirage-graph` — attack-path deception; поставя примамки по вероятните пътища на атаката |
+| `internal/toolkit` | Attacker Toolkit DB — fingerprint на инструменти и предсказване на следваща стъпка |
+| `internal/insider` | insider-threat kit: vertical-специфични honey документи + DPIA/policy шаблони (правна рамка) |
+| `internal/compliance` | одит срещу NIS2/DORA/ISO 27001/PCI/SOC2/IEC 62443; способност→контроли, markdown доклад |
+| `internal/export` | STIX 2.1 bundle, TheHive alert, дедупликиран IOC списък (MISP/OpenCTI/TheHive) |
+| `internal/watermark` | watermarking и проследяване на изтичане на подхвърлено съдържание |
+| `internal/fleet` | авто-ротация на идентичности (чиста функция на времето; отлага при активен engagement, пропуска изгорени) |
+| `internal/replay` | SSH session replay в asciinema v2 формат |
+| `internal/drivers/compute` (proxmox) | добавен `proxmox` драйвер към `inproc`/`podman`/`libvirt` |
+| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите (+ mirage-graph, honey MCP през miragectl/поддпакети) |
 
 ### Протоколи (`internal/honeyd/svc_*.go`)
 
