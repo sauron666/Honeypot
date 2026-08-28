@@ -226,21 +226,15 @@ func (s *FileStore) Query(ctx context.Context, q Query) ([]*event.Event, error) 
 	defer s.mu.RUnlock()
 
 	out := make([]*event.Event, 0, q.limit())
-	if q.Ascending {
-		for _, e := range s.recent {
-			if !q.Matches(e) {
-				continue
-			}
+	for _, e := range s.recent {
+		if q.Matches(e) {
 			out = append(out, e)
 		}
-	} else {
-		for i := len(s.recent) - 1; i >= 0; i-- {
-			if !q.Matches(s.recent[i]) {
-				continue
-			}
-			out = append(out, s.recent[i])
-		}
 	}
+	// Insertion order is chain order, not time order: concurrent sessions
+	// interleave, so an event created earlier can be sealed later. A timeline
+	// an analyst reads has to be ordered by when things happened.
+	sortByTime(out, q.Ascending)
 	return page(out, q), nil
 }
 
@@ -297,10 +291,33 @@ func (s *FileStore) queryFile(ctx context.Context, q Query) ([]*event.Event, err
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	if !q.Ascending {
-		sort.SliceStable(out, func(i, j int) bool { return out[i].Time > out[j].Time })
-	}
+	sortByTime(out, q.Ascending)
 	return page(out, q), nil
+}
+
+// sortByTime orders events by their timestamp, breaking ties on chain sequence
+// so that events recorded in the same millisecond keep the order they happened.
+func sortByTime(in []*event.Event, ascending bool) {
+	sort.SliceStable(in, func(i, j int) bool {
+		a, b := in[i], in[j]
+		if a.Time != b.Time {
+			if ascending {
+				return a.Time < b.Time
+			}
+			return a.Time > b.Time
+		}
+		var aSeq, bSeq uint64
+		if a.Mirage.Chain != nil {
+			aSeq = a.Mirage.Chain.Seq
+		}
+		if b.Mirage.Chain != nil {
+			bSeq = b.Mirage.Chain.Seq
+		}
+		if ascending {
+			return aSeq < bSeq
+		}
+		return aSeq > bSeq
+	})
 }
 
 func page(in []*event.Event, q Query) []*event.Event {

@@ -281,3 +281,42 @@ func TestCorruptLineIsReportedOnOpen(t *testing.T) {
 		t.Fatal("a truncated evidence file must be reported, not silently accepted")
 	}
 }
+
+func TestQueryOrdersByEventTimeNotInsertionOrder(t *testing.T) {
+	// Concurrent decoy sessions interleave, so an event created earlier can be
+	// sealed later. A timeline an analyst reads must follow when things
+	// happened, not the order the chain happened to seal them.
+	s, _ := openTemp(t, DefaultFileOptions())
+	ctx := context.Background()
+
+	late := newEvent("later event", event.SeverityLow)
+	late.Time = 1700000005000
+	early := newEvent("earlier event", event.SeverityLow)
+	early.Time = 1700000001000
+
+	if err := s.Append(ctx, late); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(ctx, early); err != nil {
+		t.Fatal(err)
+	}
+
+	asc, err := s.Query(ctx, Query{Ascending: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asc[0].Message != "earlier event" {
+		t.Fatalf("ascending order = %q first, want the earlier event", asc[0].Message)
+	}
+	desc, err := s.Query(ctx, Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desc[0].Message != "later event" {
+		t.Fatalf("descending order = %q first, want the later event", desc[0].Message)
+	}
+	// Sorting must not disturb the chain itself.
+	if err := s.Verify(ctx); err != nil {
+		t.Fatalf("chain broken after querying: %v", err)
+	}
+}

@@ -53,6 +53,56 @@ MIRAGE не е обвързан с конкретна инфраструктур
 
 Целта е **10 минути до първата примамка** в най-простия профил.
 
+## Бърз старт
+
+Нужен е само Go 1.24+. Без база данни, без Docker, без root.
+
+```bash
+make build
+./bin/miragectl doctor --config profiles/p0-box.yaml   # проверка преди старт
+./bin/mirage-director --config profiles/p0-box.yaml
+# конзолата: http://127.0.0.1:8422
+```
+
+Това вдига три примамки с последователни идентичности (уеб сървър, база данни,
+NAS) на девет порта. Всяко докосване се записва, зашива се в hash chain и се
+свързва в engagement.
+
+Пробвай го срещу самия него:
+
+```bash
+curl http://127.0.0.1:8080/.env                       # scanner path
+ssh -p 2222 root@127.0.0.1                            # паролата "toor" минава
+redis-cli -p 6380 CONFIG SET dir /var/spool/cron      # класическата Redis верига
+./bin/miragectl verify --file data/evidence.jsonl     # доказателствата непокътнати?
+```
+
+## Какво работи днес
+
+| Компонент | Състояние |
+|---|---|
+| `internal/event` | OCSF схема, ULID, канонична сериализация, **append-only hash chain** |
+| `internal/store` | append-only evidence файл, възстановяване след рестарт, стриймваща проверка |
+| `internal/bus` | шина със subject matching; бавен consumer не блокира примамка |
+| `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
+| `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
+| `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424) |
+| `internal/honeyd` | **ssh** (истински протокол), **http**, **telnet**, **ftp**, **redis**, **generic** |
+| `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup` с виртуална ФС и подхвърлени тайни |
+| `internal/engagement` | стичване на събития в една история + risk score |
+| `internal/alert` | праг по severity, дедупликация, линк към engagement |
+| `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
+| `cmd/miragectl` | doctor, personas, services, drivers, verify, events, status |
+
+Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
+(`test/e2e`), всичко под `-race`.
+
+## Какво НЕ работи още
+
+Няма VMI observer, няма пълни VM примамки, няма identity/AD deception, няма
+ransomware engine, няма Life Engine, няма overlay режим. Пътната карта и редът
+на изпълнение: `docs/07-ROADMAP.md`.
+
 ## Статус
 
-**Фаза: планиране.** Няма код все още — тези commit-и са архитектурният план.
+**Фаза 0 завършена, фаза 1 в ход.** Продуктът е използваем днес в профил P0.

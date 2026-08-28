@@ -1,0 +1,84 @@
+# Profile P0 - "honeypot in a box"
+#
+# One process, no hypervisor, no containers, no root. Three decoys with
+# consistent identities answering six services. This is the ten-minute install
+# described in docs/06-DEPLOYMENT-PROFILES.md and the Community edition default.
+#
+#   make build && ./bin/mirage-director --config profiles/p0-box.yaml
+#   open http://127.0.0.1:8422
+#
+# Ports are unprivileged on purpose: never run a honeypot as root. To present
+# the real ports, redirect them at the firewall, e.g.
+#   nft add rule inet nat prerouting tcp dport 22 redirect to :2222
+
+tenant: default
+site: box
+
+data_dir: ./data
+
+api:
+  # The management console. Keep it on loopback or a management network;
+  # it must never be reachable from the decoy segment (docs/04).
+  listen: 127.0.0.1:8422
+  # token: set-me-if-not-on-loopback
+
+honeyd:
+  bind: 0.0.0.0
+  max_session_duration: 30m
+  max_conns_per_ip: 25
+
+  decoys:
+    - id: dcy-web01
+      persona: linux/web
+      services:
+        - service: ssh
+          port: 2222
+        - service: http
+          port: 8080
+        - service: ftp
+          port: 2121
+        - service: telnet
+          port: 2323
+
+    - id: dcy-db01
+      persona: linux/db
+      services:
+        - service: ssh
+          port: 2223
+        - service: redis
+          port: 6380
+        - service: generic
+          port: 3307
+          options:
+            name: mysql
+            # A believable MySQL greeting: version, then the handshake bytes a
+            # scanner expects to see.
+            banner: "J\\x00\\x00\\x00\\n8.0.36-0ubuntu0.22.04.1\\x00"
+
+    - id: dcy-nas01
+      persona: linux/backup
+      services:
+        - service: ssh
+          port: 2224
+        - service: ftp
+          port: 2122
+
+engagement:
+  # How long a source can be quiet before its visit is considered finished.
+  idle_timeout: 30m
+
+alerts:
+  # Deception's promise is few alerts, all real. Lowering this floods the SIEM.
+  min_severity: high
+  sinks:
+    - driver: stdout
+    - driver: file
+      config:
+        path: alerts.jsonl
+
+storage:
+  memory_window: 200000
+  sync_every: 1
+
+drivers:
+  compute: inproc

@@ -9,18 +9,21 @@
 
 ---
 
-## Фаза 0 — Гръбнак и абстракции  (3–4 седмици)
+> **Състояние към 2026-08-28:** фаза 0 е завършена; от фаза 1 са готови
+> персоните, шест протокола, sink драйверите, конзолата и профил P0.
+
+## Фаза 0 — Гръбнак и абстракции  (3–4 седмици) — ✅ ЗАВЪРШЕНА
 **Цел:** едно събитие от край до край + правилните шевове от първия ден.
 
-- [ ] Monorepo, Go workspace, CI (lint, tests, gosec, SBOM, gitleaks)
-- [ ] Event schema v0 (OCSF плик + `mirage` разширение) + hash chain
-- [ ] NATS + ClickHouse + Postgres + MinIO (docker-compose за dev)
-- [ ] **Driver Registry + осемте интерфейса** с `capabilities` декларации
-- [ ] `ComputeDriver`: `libvirt` **и** `podman` (две имплементации от ден 1)
+- [x] Monorepo, Go workspace, CI (fmt, vet, test, race, govulncheck)
+- [x] Event schema v0 (OCSF плик + `mirage` разширение) + hash chain
+- [ ] NATS + ClickHouse + Postgres + MinIO (за момента: in-process шина + JSONL evidence store)
+- [x] **Driver Registry + осемте интерфейса** с `capabilities` декларации
+- [x] `ComputeDriver`: `inproc`, `podman` **и** `libvirt`
 - [ ] `FabricDriver`: вграден `nftables/linux-bridge`
-- [ ] `mirage-director` v0: инвентар, REST/gRPC, миграции, RBAC скелет
+- [x] `mirage-director` v0: REST API, evidence pipeline, конзола
 - [ ] `mirage-tap` v0: pcap + Suricata EVE ingest + сесиен индекс
-- [ ] `mirage-ui` v0: списък събития, детайл на сесия, download
+- [x] `mirage-ui` v0: engagements, събития, детайл, session transcript, verify
 - [ ] Golden template: `deb12-web` (Packer)
 
 **Приемане:** SSH brute force към примамка → сесия, pcap и изпълнени команди в UI,
@@ -32,17 +35,17 @@
 ## Фаза 1 — MVP: широчина + внедримост  (8–10 седмици)
 **Цел:** продукт, който непознат човек може да инсталира и от който има полза за час.
 
-- [ ] `mirage-honeyd`: 12+ протокола с per-deploy рандомизация, multi-IP projection
-- [ ] **Персони и Deception Packs** — примамката се описва като персона (роля,
-      вертикал, държава, език); стартов каталог с 15 персони, i18n от ден 1
+- [~] `mirage-honeyd`: 6 протокола (ssh, http, telnet, ftp, redis, generic) с per-deploy рандомизация; остават SMB, RDP, MySQL/MSSQL, VNC, SNMP, OT и multi-IP projection
+- [~] **Персони** — три Linux персони с виртуална ФС, подхвърлени тайни и
+      стабилен per-deployment seed; остават Deception Packs, i18n и още 12 персони
 - [ ] **Deception-as-Code**: `miragectl plan/apply/destroy` + drift detection
 - [ ] `mirage-tokens`: 10 типа + callback receiver + minting API
 - [ ] `mirage-gateway` v1: `sinkhole`, kill switch, всички hard-coded предпазители
 - [ ] `ComputeDriver: proxmox`, `FabricDriver: opnsense` (втори драйвер за реалност)
-- [ ] Sinks: syslog, webhook, ECS/Elastic, Splunk HEC, Slack/Teams/Telegram
+- [~] Sinks: stdout, file, webhook, syslog RFC5424; остават ECS/Elastic, Splunk HEC, чат
 - [ ] Export: STIX 2.1 → MISP; TheHive alert
 - [ ] SSH/PTY session replay в UI
-- [ ] **Профил P0 "honeypot в кутия"**: инсталация с една команда, < 10 минути
+- [x] **Профил P0 "honeypot в кутия"**: `make build && ./bin/mirage-director`
 
 **Приемане:** трима външни доброволци инсталират P0 профила по документацията,
 без наша помощ, и получават валиден alert за под час. Community release.

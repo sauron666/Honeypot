@@ -1,0 +1,81 @@
+# Profile P7 - home lab / research
+#
+# The reference deployment used to develop MIRAGE: a Proxmox node, an OPNsense
+# firewall, an isolated deception VLAN and a small Active Directory.
+#
+# Network layout (zone names are abstractions; the fabric driver maps them):
+#   ZONE PROD   VLAN 10   real network
+#   ZONE MGMT   VLAN 20   hypervisor, firewall, MIRAGE control plane
+#   ZONE DIRTY  VLAN 666  decoys, with no route to PROD or MGMT
+#   ZONE XFER   VLAN 667  one-way site controller -> director
+#
+# The decoys below still run in-process (compute: inproc), which is the right
+# starting point: put the box in VLAN 666 with a single interface, redirect the
+# real ports to the unprivileged ones, and you have a full decoy segment without
+# a single VM. Move to compute: libvirt or proxmox when you want full-OS decoys
+# with agentless introspection.
+
+tenant: homelab
+site: sofia-lab
+
+data_dir: /var/lib/mirage
+
+api:
+  # Management interface only: this address must live in MGMT, never in DIRTY.
+  listen: 10.20.0.5:8422
+  token: change-me
+  public_url: https://mirage.lab.internal
+
+honeyd:
+  # Bind to the decoy-segment interface.
+  bind: 10.66.0.10
+  max_session_duration: 45m
+  max_conns_per_ip: 40
+  max_conns_total: 4000
+
+  decoys:
+    - id: dcy-web01
+      persona: linux/web
+      services:
+        - {service: ssh,    port: 2222}
+        - {service: http,   port: 8080}
+        - {service: ftp,    port: 2121}
+
+    - id: dcy-db01
+      persona: linux/db
+      services:
+        - {service: ssh,   port: 2223}
+        - {service: redis, port: 6380}
+
+    - id: dcy-nas01
+      persona: linux/backup
+      services:
+        - {service: ssh,    port: 2224}
+        - {service: ftp,    port: 2122}
+        - {service: telnet, port: 2323}
+
+engagement:
+  idle_timeout: 30m
+
+alerts:
+  min_severity: high
+  sinks:
+    - driver: file
+      config:
+        path: alerts.jsonl
+    # Ship to the lab SIEM. Wazuh and Elastic both read this happily.
+    - driver: syslog
+      config:
+        address: 10.20.0.20:514
+        network: udp
+    # And to chat, so somebody actually sees it.
+    # - driver: webhook
+    #   config:
+    #     url: https://hooks.example.invalid/mirage
+
+storage:
+  memory_window: 500000
+  sync_every: 1
+
+drivers:
+  compute: inproc

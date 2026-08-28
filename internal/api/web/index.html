@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIRAGE</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#128064;</text></svg>">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot"></span> MIRAGE</div>
+  <div class="stats" id="stats"></div>
+  <div class="actions">
+    <label class="live"><input type="checkbox" id="autorefresh" checked> live</label>
+    <button id="verify" title="Replay the evidence hash chain">verify evidence</button>
+  </div>
+</header>
+
+<main>
+  <section class="pane" id="engagements-pane">
+    <h2>Engagements <span class="hint">one attacker, one story</span></h2>
+    <div id="engagements" class="list"></div>
+  </section>
+
+  <section class="pane" id="events-pane">
+    <h2>
+      Events
+      <span class="hint" id="filter-label">all</span>
+      <button id="clear-filter" class="link" hidden>clear filter</button>
+    </h2>
+    <div class="filters">
+      <input id="q" type="search" placeholder="search commands, paths, payloads, IPs">
+      <select id="severity">
+        <option value="">any severity</option>
+        <option value="low">low+</option>
+        <option value="medium">medium+</option>
+        <option value="high">high+</option>
+        <option value="critical">critical</option>
+      </select>
+    </div>
+    <div id="events" class="list"></div>
+  </section>
+</main>
+
+<div id="detail" class="drawer" hidden>
+  <div class="drawer-head">
+    <strong id="detail-title"></strong>
+    <button id="detail-close">close</button>
+  </div>
+  <div id="detail-body"></div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

