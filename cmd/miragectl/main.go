@@ -235,6 +235,7 @@ func listServices() error {
 		"vnc":     "RFB with VNC auth; records the DES challenge and response",
 		"smtp":    "mail server that never delivers; captures credentials and open-relay probes",
 		"snmp":    "SNMP v1/v2c over UDP; records community strings, never amplifies",
+		"mcp":     "honey MCP server; catches AI agents and attackers discovering internal tools",
 		"kerberos": "decoy KDC; sees enumeration, spraying and roasting as ticket requests, " +
 			"and hands out hashes that crack to a watched password",
 		"modbus": "Modbus/TCP PLC; reads are recon, writes are treated as process manipulation",
