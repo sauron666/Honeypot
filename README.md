@@ -123,7 +123,9 @@ Deception-as-Code — виж какво ще се промени, преди д�
 | `internal/ransomware` | **шест независими сигнала за криптор + tarpit + извличане на контактите от бележката** |
 | `internal/engagement` | стичване на събития в една история + risk score; възстановяване от evidence файл |
 | `internal/alert` | праг по severity, дедупликация, линк към engagement |
+| `internal/presence` | **overlay режим**: примамки в чужд сегмент без промяна на мрежата |
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
+| `cmd/mirage-presence` | Presence Agent — поема свободни адреси и тунелира към хъба |
 | `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
@@ -131,9 +133,13 @@ Deception-as-Code — виж какво ще се промени, преди д�
 
 ## Какво НЕ работи още
 
-Няма VMI observer, няма пълни VM примамки, няма Kerberos KDC (AS-REP и
+Няма VMI observer, няма пълни VM примамки (libvirt/proxmox драйверите ги има,
+но нищо още не ги ползва), няма Kerberos KDC (AS-REP и
 kerberoast се засичат при изброяването през LDAP, не при самото искане на
-тикет), няма Life Engine (синтетични потребители), няма overlay режим.
+тикет), няма Life Engine (синтетични потребители).
+
+Overlay тунелът е нешифрован TCP — предвиден е да минава през съществуващ
+VPN или WireGuard между площадките. TLS в самия протокол е следващата стъпка.
 
 SMB покрива negotiate, session setup (с улов на NetNTLMv2) и tree connect;
 файловите операции връщат ACCESS_DENIED. Сервирането на файлове по SMB2

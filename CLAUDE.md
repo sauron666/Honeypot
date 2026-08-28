@@ -44,8 +44,9 @@ make build
 | `internal/assure` | самотест на веригата + **Detectability Score** (fingerprint) |
 | `internal/config` | YAML манифест, валидация, `plan` диф, immutable настройки |
 | `internal/app` | сглобяването на едно място (бинарът и e2e тестовете ползват него) |
+| `internal/presence` | overlay: хъб + Presence Agent, тунел с мултиплексиране |
 | `internal/api` | REST + вградена конзола (`internal/api/web/`) |
-| `cmd/mirage-director`, `cmd/miragectl` | бинарите |
+| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence` | бинарите |
 
 ### Протоколи (`internal/honeyd/svc_*.go`)
 
@@ -96,6 +97,13 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
   пишат след „stopped cleanly".
 - **`apply` трябва да реинжектира runtime опциите** (host key path, token
   lookup), иначе новите listener-и се вдигат счупени.
+- **Мултиплексорът не бива да блокира read цикъла.** Доставката на данни към
+  поток минава през буфериран канал; директно писане в pipe заключва целия
+  тунел (head-of-line). При препълване потокът се затваря, не се блокира.
+- **Затварянето на поток не бива да изхвърля недоставените данни** — отговор,
+  който вече е пристигнал, се губи, защото peer-ът отговаря и затваря наведнъж.
+- **`Hub.Close()` трябва да затвори и приетите сокети**, не само listener-а,
+  иначе изчаква дълги read deadline-и.
 
 ---
 
@@ -119,10 +127,8 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
 
 ## 5. Какво следва (по приоритет)
 
-1. **Overlay режим (`mirage-presence`, ADR-009)** — Presence Agent поема
-   свободни IP-та в чужд сегмент и тунелира през WireGuard към централните
-   примамки. Това прави внедряването 10-минутно без мрежов проект и отключва
-   MSSP канала. Контролите са в `docs/04 §4а`.
+1. **TLS за overlay тунела** — сега е нешифрован TCP, предвиден да минава през
+   съществуващ VPN. Взаимен TLS с certificate pinning е правилното следващо нещо.
 2. **Пълни VM примамки** — `libvirt`/`proxmox` драйверите съществуват, но
    нищо не ги ползва. Нужен е provisioner слой, който вдига decoy VM и я
    свързва с engagement-ите.

@@ -1,0 +1,90 @@
+# Profile P3 — MSSP / overlay
+#
+# Decoys that appear inside a customer's segment without anything being
+# deployed into it. No VLANs, no firewall rules, no switch changes: a small
+# Presence Agent claims unused addresses in that segment and tunnels whatever
+# arrives to this hub, where the real decoys live in the isolated zone.
+#
+# This is what makes deception deployable in a network nobody will let you
+# change — which is where most deception projects actually die.
+#
+# On the hub:
+#   ./bin/mirage-director --config profiles/p3-mssp-overlay.yaml
+#
+# In the customer's segment (the addresses must already exist on that host —
+# `ip addr add 10.20.5.240/24 dev eth0`):
+#   MIRAGE_PRESENCE_TOKEN=... ./bin/mirage-presence \
+#     --hub mirage.mssp.example:8443 --id floor-3 \
+#     --addresses 10.20.5.240,10.20.5.241 \
+#     --services ssh:22,http:80,smb:445
+#
+# Containment (ADR-009, docs/04 §4a): the agent always dials out, the hub never
+# dials in. The hub decides which services an agent may carry, not the agent.
+# With the tunnel down the agent fails closed and serves nothing, because a
+# decoy that answers while nothing is recording is worse than a closed port.
+
+tenant: mssp
+site: hub
+
+data_dir: /var/lib/mirage
+
+api:
+  listen: 10.20.0.5:8422
+  token: change-me
+  public_url: https://mirage.mssp.example
+
+presence:
+  # Must be reachable from the customer segments. Not loopback.
+  listen: 0.0.0.0:8443
+  # Rotate this per customer in a real deployment; it is the only thing between
+  # someone on that segment and the ability to project decoys into the platform.
+  token: change-me-per-customer
+  agents:
+    - id: acme-floor-3
+      decoy_id: dcy-acme-fs01
+      persona: linux/fileserver
+      services: [ssh, smb, ftp]
+
+    - id: acme-dmz
+      decoy_id: dcy-acme-web01
+      persona: linux/web
+      services: [ssh, http]
+
+    - id: acme-datacentre
+      decoy_id: dcy-acme-dc01
+      persona: windows/dc
+      services: [ldap, smb]
+
+honeyd:
+  bind: 10.66.0.10
+  max_session_duration: 45m
+
+  # Decoys bound locally in the isolated zone as well, for anything reachable
+  # from here directly.
+  decoys:
+    - id: dcy-hub-web01
+      persona: linux/web
+      services:
+        - {service: http,   port: 8080}
+        - {service: tokens, port: 8081}
+
+tokens:
+  base_url: http://10.66.0.10:8081
+
+engagement:
+  idle_timeout: 30m
+
+alerts:
+  min_severity: high
+  sinks:
+    - driver: file
+      config: {path: alerts.jsonl}
+    # - driver: elastic
+    #   config: {url: "https://es.mssp.example:9200", index: "mirage-alerts", api_key: "..."}
+
+storage:
+  memory_window: 500000
+  sync_every: 1
+
+drivers:
+  compute: inproc

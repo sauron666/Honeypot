@@ -20,6 +20,7 @@ import (
 
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/honeyd"
+	"github.com/sauron666/Honeypot/internal/presence"
 )
 
 // Config is a complete MIRAGE deployment.
@@ -36,13 +37,14 @@ type Config struct {
 	DataDir string `yaml:"data_dir"`
 	Profile string `yaml:"profile"`
 
-	API        APIConfig        `yaml:"api"`
-	Honeyd     HoneydConfig     `yaml:"honeyd"`
-	Engagement EngagementConfig `yaml:"engagement"`
-	Alerts     AlertConfig      `yaml:"alerts"`
-	Storage    StorageConfig    `yaml:"storage"`
-	Drivers    DriverConfig     `yaml:"drivers"`
-	Tokens     TokenConfig      `yaml:"tokens"`
+	API        APIConfig          `yaml:"api"`
+	Honeyd     HoneydConfig       `yaml:"honeyd"`
+	Engagement EngagementConfig   `yaml:"engagement"`
+	Alerts     AlertConfig        `yaml:"alerts"`
+	Storage    StorageConfig      `yaml:"storage"`
+	Drivers    DriverConfig       `yaml:"drivers"`
+	Tokens     TokenConfig        `yaml:"tokens"`
+	Presence   presence.HubConfig `yaml:"presence"`
 }
 
 // TokenConfig configures honeytoken minting.
@@ -208,6 +210,9 @@ func (c *Config) applyDefaults() {
 	if c.Drivers.Compute == "" {
 		c.Drivers.Compute = "inproc"
 	}
+	if len(c.Presence.Agents) > 0 && c.Presence.Listen == "" {
+		c.Presence.Listen = "0.0.0.0:8443"
+	}
 	if c.Tokens.File == "" {
 		c.Tokens.File = filepath.Join(c.DataDir, "tokens.json")
 	}
@@ -284,12 +289,50 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if err := c.validatePresence(); err != nil {
+		return err
+	}
 	if _, err := ParseSeverity(c.Alerts.MinSeverity); err != nil {
 		return err
 	}
 	for i, s := range c.Alerts.Sinks {
 		if s.Driver == "" {
 			return fmt.Errorf("config: alert sink %d has no driver", i)
+		}
+	}
+	return nil
+}
+
+// validatePresence checks the overlay configuration. An agent that declares a
+// service the farm cannot serve would connect happily and then drop every
+// session, which looks like a working decoy and records nothing.
+func (c *Config) validatePresence() error {
+	if len(c.Presence.Agents) == 0 {
+		return nil
+	}
+	if c.Presence.Token == "" {
+		return fmt.Errorf("config: presence.token is required: an unauthenticated hub lets " +
+			"anyone who can reach it project decoys into your platform")
+	}
+	for _, a := range c.Presence.Agents {
+		if a.ID == "" {
+			return fmt.Errorf("config: a presence agent has no id")
+		}
+		if a.Persona == "" {
+			return fmt.Errorf("config: presence agent %q has no persona (available: %s)",
+				a.ID, strings.Join(honeyd.PersonaNames(), ", "))
+		}
+		if _, err := honeyd.BuildPersona(a.Persona, "validate"); err != nil {
+			return fmt.Errorf("config: presence agent %q: %w", a.ID, err)
+		}
+		if len(a.Services) == 0 {
+			return fmt.Errorf("config: presence agent %q may forward nothing", a.ID)
+		}
+		for _, svc := range a.Services {
+			if !isKnownService(svc) {
+				return fmt.Errorf("config: presence agent %q declares unknown service %q (available: %s)",
+					a.ID, svc, strings.Join(honeyd.ServiceNames(), ", "))
+			}
 		}
 	}
 	return nil
@@ -428,6 +471,12 @@ func (c *Config) Warnings() []string {
 	}
 	if sev, err := ParseSeverity(c.Alerts.MinSeverity); err == nil && sev <= event.SeverityLow {
 		w = append(w, "alerts.min_severity is low: forwarding every probe to your SIEM defeats the point of deception")
+	}
+	if len(c.Presence.Agents) > 0 {
+		host, _, _ := strings.Cut(c.Presence.Listen, ":")
+		if host == "127.0.0.1" || host == "localhost" {
+			w = append(w, "the presence hub is bound to loopback: agents in other segments will not reach it")
+		}
 	}
 	privileged := 0
 	for _, d := range c.Honeyd.Decoys {

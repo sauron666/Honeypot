@@ -19,6 +19,7 @@ build:
 	@mkdir -p $(BIN)
 	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN)/mirage-director ./cmd/mirage-director
 	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN)/miragectl       ./cmd/miragectl
+	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN)/mirage-presence ./cmd/mirage-presence
 	@echo "built -> $(BIN)/"
 
 test:

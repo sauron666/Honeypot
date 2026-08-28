@@ -24,6 +24,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/presence"
 	"github.com/sauron666/Honeypot/internal/store"
 )
 
@@ -979,5 +980,185 @@ alerts:
 	req, _ := plan2["requires_restart"].([]any)
 	if len(req) == 0 {
 		t.Fatal("changing the tenant must be reported as needing a restart")
+	}
+}
+
+// TestOverlayProjectsADecoyIntoAnotherSegment exercises overlay mode against
+// the real decoy farm: an agent claims an address, an attacker connects to it,
+// and the whole pipeline records the session as if the decoy were there.
+//
+// This is what makes deception deployable in a network nobody will let us
+// change: no VLANs, no firewall rules, no switch work.
+func TestOverlayProjectsADecoyIntoAnotherSegment(t *testing.T) {
+	dir := t.TempDir()
+	apiPort, hubPort, sshPort := freePort(t), freePort(t), freePort(t)
+	claimedPort := freePort(t)
+
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+tenant: e2e
+site: lab
+data_dir: %s
+api: {listen: "127.0.0.1:%d"}
+honeyd:
+  bind: 127.0.0.1
+  decoys:
+    - id: dcy-local
+      persona: linux/web
+      services: [{service: ssh, port: %d}]
+presence:
+  listen: "127.0.0.1:%d"
+  token: "overlay-secret"
+  agents:
+    - id: floor-3
+      decoy_id: dcy-remote01
+      persona: linux/db
+      services: [telnet]
+alerts:
+  min_severity: high
+  sinks: [{driver: stdout}]
+`, dir, apiPort, sshPort, hubPort)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := app.New(cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer scancel()
+		a.Stop(sctx)
+	}()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", apiPort)
+	waitUntil(t, 10*time.Second, "api", func() bool {
+		resp, err := http.Get(base + "/api/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	})
+
+	// The agent runs where the decoy should appear. Here that is the same
+	// host, but nothing about the protocol assumes it.
+	agent, err := presence.NewAgent(presence.AgentSettings{
+		Hub: fmt.Sprintf("127.0.0.1:%d", hubPort), Token: "overlay-secret", ID: "floor-3",
+		Addresses:    []string{"127.0.0.1"},
+		Services:     []presence.ServiceBinding{{Service: "telnet", Port: claimedPort}},
+		ReconnectMin: 50 * time.Millisecond, ReconnectMax: 200 * time.Millisecond,
+	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go agent.Run(ctx)
+	defer agent.Close()
+
+	waitUntil(t, 10*time.Second, "the agent to connect", agent.Connected)
+
+	// The hub must report it.
+	var presenceResp struct {
+		Enabled   bool `json:"enabled"`
+		Connected int  `json:"connected"`
+		Agents    []struct {
+			ID      string `json:"id"`
+			DecoyID string `json:"decoy_id"`
+			Persona string `json:"persona"`
+		} `json:"agents"`
+	}
+	d := deployment{api: base}
+	waitUntil(t, 10*time.Second, "the hub to report the agent", func() bool {
+		d.getJSON(t, "/api/presence", &presenceResp)
+		return presenceResp.Connected == 1
+	})
+	if presenceResp.Agents[0].DecoyID != "dcy-remote01" {
+		t.Fatalf("the hub reported the wrong decoy: %+v", presenceResp.Agents[0])
+	}
+
+	// Now attack the claimed address as if it were a host on that segment.
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", claimedPort))
+	if err != nil {
+		t.Fatalf("the claimed address did not answer: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(40 * time.Second))
+	r := bufio.NewReader(conn)
+
+	expect(t, r, "login:")
+	fmt.Fprint(conn, "dba\r\n")
+	expect(t, r, "Password:")
+	fmt.Fprint(conn, "dba123\r\n") // a planted password for linux/db
+	expect(t, r, "dba@")
+	fmt.Fprint(conn, "cat /etc/mysql/my.cnf\r\n")
+	expect(t, r, "password=")
+
+	// The evidence must look exactly like a locally bound decoy's, and must be
+	// attributed to the attacker rather than to the agent.
+	var evResp struct {
+		Events []*event.Event `json:"events"`
+	}
+	waitUntil(t, 15*time.Second, "the tunnelled session to be recorded", func() bool {
+		d.getJSON(t, "/api/events?limit=200", &evResp)
+		for _, e := range evResp.Events {
+			if e.Mirage.DecoyID == "dcy-remote01" && e.ClassUID == event.ClassCommandExecuted {
+				return true
+			}
+		}
+		return false
+	})
+
+	var sawToken, sawOverlay bool
+	clientHost, clientPort, _ := net.SplitHostPort(conn.LocalAddr().String())
+	for _, e := range evResp.Events {
+		if e.Mirage.DecoyID != "dcy-remote01" {
+			continue
+		}
+		if e.Mirage.Persona != "linux/db" {
+			t.Errorf("the tunnelled decoy wore the wrong persona: %s", e.Mirage.Persona)
+		}
+		// Attribution is the whole design: every session tunnelled from a
+		// segment must carry the attacker's address, not the agent's.
+		if e.Src != nil && e.Src.IP != clientHost {
+			t.Errorf("event attributed to %s, but the attacker was %s", e.Src.IP, clientHost)
+		}
+		if e.Src != nil && e.Src.Port != 0 && fmt.Sprint(e.Src.Port) != clientPort {
+			t.Errorf("source port %d, want %s", e.Src.Port, clientPort)
+		}
+		if e.GetString("transport") == "overlay" {
+			sawOverlay = true
+		}
+		if e.GetString("honeytoken") == "mysql-root-credential" {
+			sawToken = true
+		}
+	}
+	if !sawOverlay {
+		t.Error("no event recorded that the session arrived over the overlay")
+	}
+	if !sawToken {
+		t.Error("the honeytoken read over the tunnel was not recorded")
+	}
+
+	// The engagement must exist and be attributed to the attacker.
+	var engResp struct {
+		Engagements []engagement.Engagement `json:"engagements"`
+	}
+	d.getJSON(t, "/api/engagements", &engResp)
+	var found bool
+	for _, e := range engResp.Engagements {
+		if contains(e.Decoys, "dcy-remote01") {
+			found = true
+			if !e.Authenticated {
+				t.Error("the tunnelled login was not recorded as authenticated")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the tunnelled session produced no engagement")
 	}
 }

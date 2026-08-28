@@ -29,6 +29,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/forge"
 	"github.com/sauron666/Honeypot/internal/honeyd"
+	"github.com/sauron666/Honeypot/internal/presence"
 	"github.com/sauron666/Honeypot/internal/store"
 	"github.com/sauron666/Honeypot/internal/tokens"
 	"github.com/sauron666/Honeypot/internal/version"
@@ -50,7 +51,9 @@ type Deps struct {
 	RunningConfig *config.Config
 	// Apply reconciles the farm with a new listener set. It is supplied by the
 	// caller because applying needs runtime options the API does not own.
-	Apply     func(listeners []honeyd.ListenerConfig) (added, removed []string, err error)
+	Apply func(listeners []honeyd.ListenerConfig) (added, removed []string, err error)
+	// Presence is the overlay hub, when one is configured.
+	Presence  *presence.Hub
 	Tenant    string
 	Site      string
 	StartedAt time.Time
@@ -102,6 +105,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/evidence/verify", s.verify)
 	s.mux.HandleFunc("POST /api/assure", s.runAssurance)
 	s.mux.HandleFunc("POST /api/assure/fingerprint", s.runFingerprint)
+	s.mux.HandleFunc("GET /api/presence", s.presenceAgents)
 	s.mux.HandleFunc("GET /api/config", s.currentConfig)
 	s.mux.HandleFunc("POST /api/config/plan", s.planConfig)
 	s.mux.HandleFunc("POST /api/config/apply", s.applyConfig)
@@ -468,6 +472,19 @@ func (s *Server) runFingerprint(w http.ResponseWriter, r *http.Request) {
 
 	fp := &assure.Fingerprinter{Timeout: 5 * time.Second}
 	writeJSON(w, http.StatusOK, fp.Run(ctx, profiles))
+}
+
+// presenceAgents reports the overlay agents currently connected.
+func (s *Server) presenceAgents(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Presence == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "agents": []any{}})
+		return
+	}
+	agents := s.deps.Presence.Agents()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": true, "hub": s.deps.Presence.Addr(),
+		"agents": agents, "connected": len(agents),
+	})
 }
 
 func (s *Server) currentConfig(w http.ResponseWriter, r *http.Request) {

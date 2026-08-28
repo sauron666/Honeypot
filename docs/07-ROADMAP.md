@@ -68,7 +68,10 @@
 - [ ] RDP видео реконструкция
 - [ ] Anti-fingerprinting pass #1 (SMBIOS/DMI, CPUID, дискови модели, MAC OUI)
 - [ ] `mirage-breadcrumbs` агент v1 (Windows/Linux) + Velociraptor artifacts
-- [ ] **`mirage-presence` — overlay режим** (WireGuard, ARP takeover) ★
+- [x] **`mirage-presence` — overlay режим** ★: хъб + агент, мултиплексиран тунел,
+      агентът винаги набира навън, хъбът решава кои услуги се носят, fail-closed
+      при паднал тунел, атрибуция към реалния адрес на атакуващия.
+      Остава: TLS в самия тунел и ARP takeover на свободни адреси
 - [x] **`mirage-assure` част 2 — Deception Assurance** (синтетичен атакуващ,
       проверка на веригата примамка → събитие → съхранение; остава проверка
       на доставката до SIEM)

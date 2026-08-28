@@ -24,6 +24,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/honeyd"
+	"github.com/sauron666/Honeypot/internal/presence"
 	"github.com/sauron666/Honeypot/internal/store"
 	"github.com/sauron666/Honeypot/internal/tokens"
 )
@@ -39,6 +40,8 @@ type App struct {
 	Farm       *honeyd.Server
 	API        *api.Server
 	Tokens     *tokens.Store
+	// Presence is the overlay hub, when the deployment declares agents.
+	Presence *presence.Hub
 
 	log     *slog.Logger
 	started time.Time
@@ -149,11 +152,21 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		return nil, err
 	}
 
+	if len(cfg.Presence.Agents) > 0 {
+		// The farm serves tunnelled connections exactly as it serves bound
+		// ones, so a decoy behind an overlay is not a second kind of decoy.
+		a.Presence, err = presence.NewHub(cfg.Presence, a.Farm, log)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	a.API, err = api.New(cfg.API.Listen, api.Deps{
 		Store: evStore, Tracker: a.Tracker, Farm: a.Farm, Registry: a.Registry,
 		Dispatcher: a.Dispatcher, Tokens: a.Tokens, RunningConfig: cfg,
-		Apply:  a.ApplyListeners,
-		Tenant: cfg.Tenant, Site: cfg.Site,
+		Apply:    a.ApplyListeners,
+		Presence: a.Presence,
+		Tenant:   cfg.Tenant, Site: cfg.Site,
 		StartedAt: a.started, Log: log, Token: cfg.API.Token,
 	})
 	if err != nil {
@@ -229,8 +242,17 @@ func (a *App) Start(ctx context.Context) error {
 	if err := a.Farm.Start(ctx); err != nil {
 		return err
 	}
+	if a.Presence != nil {
+		if err := a.Presence.Start(ctx); err != nil {
+			a.Farm.Close()
+			return err
+		}
+	}
 	if err := a.API.Start(); err != nil {
 		a.Farm.Close()
+		if a.Presence != nil {
+			a.Presence.Close()
+		}
 		return err
 	}
 	go a.sweepLoop(ctx)
@@ -261,6 +283,9 @@ func (a *App) Stop(ctx context.Context) error {
 	close(a.sweepCh)
 	if err := a.API.Shutdown(ctx); err != nil {
 		a.log.Warn("api shutdown", "err", err)
+	}
+	if a.Presence != nil {
+		a.Presence.Close()
 	}
 	a.Farm.Close()
 	a.Tracker.Sweep()

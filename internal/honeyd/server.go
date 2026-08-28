@@ -606,6 +606,69 @@ func (s *Server) handle(ctx context.Context, conn net.Conn, svc Service, p *Pers
 	}
 }
 
+// ServeConn handles a connection the farm did not accept itself.
+//
+// This is what overlay mode needs: a Presence Agent in someone else's segment
+// accepts the connection, tunnels it here, and the decoy must still see the
+// attacker's real address. Passing the remote address explicitly is the whole
+// point -- attributing every tunnelled session to the agent's own IP would
+// merge every attacker in a segment into one meaningless engagement.
+//
+// The caller owns conn and must close it.
+func (s *Server) ServeConn(ctx context.Context, conn net.Conn, service, persona, decoyID string,
+	remote net.Addr) error {
+
+	p, err := s.persona(persona)
+	if err != nil {
+		return err
+	}
+	factory, ok := serviceRegistry[service]
+	if !ok {
+		return fmt.Errorf("honeyd: unknown service %q", service)
+	}
+	svc, err := factory(p, s.optionsFor(service))
+	if err != nil {
+		return fmt.Errorf("honeyd: build %s service: %w", service, err)
+	}
+
+	ip := hostOf(remote)
+	if !s.admit(ip) {
+		return fmt.Errorf("honeyd: refusing %s: per-source limit reached", ip)
+	}
+	defer s.release(ip)
+
+	sctx, cancel := context.WithTimeout(ctx, s.cfg.MaxSessionDuration)
+	defer cancel()
+
+	sess := s.newSession(sctx, service, p, decoyID, remote, conn.LocalAddr())
+	sess.Emit(sess.Event(event.ClassNetworkActivity, 1, event.SeverityLow).
+		WithMessage("tunnelled connection to %s decoy %s", service, p.Hostname).
+		Set("transport", "overlay"))
+
+	conn.SetDeadline(sess.deadline)
+	serveErr := svc.Serve(sctx, conn, sess)
+	s.finishSession(sess, serveErr)
+	return serveErr
+}
+
+// optionsFor returns the options configured for a service, so that a tunnelled
+// connection gets the same host keys and lookups a bound listener would.
+func (s *Server) optionsFor(service string) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, b := range s.active {
+		if b.cfg.Service == service && b.cfg.Options != nil {
+			return b.cfg.Options
+		}
+	}
+	for _, l := range s.cfg.Listeners {
+		if l.Service == service && l.Options != nil {
+			return l.Options
+		}
+	}
+	return map[string]any{}
+}
+
 // newSession registers an interaction and assigns it to an engagement.
 func (s *Server) newSession(ctx context.Context, service string, p *Persona, decoyID string,
 	remote, local net.Addr) *Session {
