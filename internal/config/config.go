@@ -19,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/farm"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/presence"
 )
@@ -45,6 +46,22 @@ type Config struct {
 	Drivers    DriverConfig       `yaml:"drivers"`
 	Tokens     TokenConfig        `yaml:"tokens"`
 	Presence   presence.HubConfig `yaml:"presence"`
+	VMs        VMFarmConfig       `yaml:"vms"`
+}
+
+// VMFarmConfig declares full-OS decoys: real machines, not emulations.
+//
+// They cost a hypervisor and an image to maintain, and they are the only way
+// to be indistinguishable from a real host, because they are one. That is also
+// the danger, which is why containment is a required, explicit answer here
+// rather than an assumption.
+type VMFarmConfig struct {
+	// Containment is "" (verify with a fabric driver, the default) or
+	// "unenforced" (the operator contains the decoy segment by other means and
+	// accepts that MIRAGE cannot check it). There is no third option: a
+	// full-OS decoy on an unexamined network is a beachhead.
+	Containment string      `yaml:"containment"`
+	Decoys      []farm.Spec `yaml:"decoys"`
 }
 
 // TokenConfig configures honeytoken minting.
@@ -129,6 +146,14 @@ type StorageConfig struct {
 // DriverConfig selects which drivers back each abstraction.
 type DriverConfig struct {
 	Compute string `yaml:"compute"`
+	// Fabric enforces and verifies segmentation. It is required before any
+	// full-OS decoy starts, unless vms.containment says otherwise.
+	Fabric string `yaml:"fabric"`
+	// ComputeConfig and FabricConfig are passed to the named driver verbatim.
+	// The core never knows what a hypervisor URI or a CIDR list means; the
+	// driver does (ADR-008).
+	ComputeConfig map[string]any `yaml:"compute_config"`
+	FabricConfig  map[string]any `yaml:"fabric_config"`
 }
 
 // Load reads, expands and validates a configuration file.
@@ -292,12 +317,76 @@ func (c *Config) Validate() error {
 	if err := c.validatePresence(); err != nil {
 		return err
 	}
+	if err := c.validateVMs(seenID); err != nil {
+		return err
+	}
 	if _, err := ParseSeverity(c.Alerts.MinSeverity); err != nil {
 		return err
 	}
 	for i, s := range c.Alerts.Sinks {
 		if s.Driver == "" {
 			return fmt.Errorf("config: alert sink %d has no driver", i)
+		}
+	}
+	return nil
+}
+
+// validateVMs checks the full-OS decoy farm.
+//
+// The containment question is settled here, at doctor time, rather than at the
+// first boot of the first VM: a deployment that discovers it has no way to
+// verify containment while a machine is already coming up on the customer's
+// network has discovered it too late.
+func (c *Config) validateVMs(usedIDs map[string]bool) error {
+	if len(c.VMs.Decoys) == 0 {
+		if c.VMs.Containment != "" {
+			return fmt.Errorf("config: vms.containment is set but no full-OS decoys are declared")
+		}
+		return nil
+	}
+	switch c.VMs.Containment {
+	case "", "verified":
+		if c.Drivers.Fabric == "" {
+			return fmt.Errorf("config: full-OS decoys need drivers.fabric so containment can be " +
+				"verified, because a VM an attacker can own is a real host on your network; " +
+				"set vms.containment: unenforced if you contain the decoy segment yourself " +
+				"and accept that MIRAGE cannot check it")
+		}
+	case "unenforced":
+		// Allowed, and warned about in Warnings().
+	default:
+		return fmt.Errorf("config: vms.containment is %q; it is \"verified\" or \"unenforced\"",
+			c.VMs.Containment)
+	}
+
+	for i, d := range c.VMs.Decoys {
+		if d.ID == "" {
+			return fmt.Errorf("config: full-OS decoy %d has no id", i)
+		}
+		if usedIDs[d.ID] {
+			return fmt.Errorf("config: %q is used by both an emulated and a full-OS decoy; "+
+				"one id must mean one decoy or the evidence cannot be read", d.ID)
+		}
+		usedIDs[d.ID] = true
+
+		if d.Persona == "" {
+			return fmt.Errorf("config: full-OS decoy %q has no persona (available: %s)",
+				d.ID, strings.Join(honeyd.PersonaNames(), ", "))
+		}
+		if _, err := honeyd.BuildPersona(d.Persona, "validate"); err != nil {
+			return fmt.Errorf("config: full-OS decoy %q: %w", d.ID, err)
+		}
+		if d.Template == "" {
+			return fmt.Errorf("config: full-OS decoy %q has no template to clone from", d.ID)
+		}
+		switch d.Revert {
+		case "", farm.RevertNever, farm.RevertOnEngagementEnd:
+		default:
+			return fmt.Errorf("config: full-OS decoy %q: revert is %q; it is %q or %q",
+				d.ID, d.Revert, farm.RevertNever, farm.RevertOnEngagementEnd)
+		}
+		if d.CPUs < 0 || d.MemoryMB < 0 {
+			return fmt.Errorf("config: full-OS decoy %q has a negative size", d.ID)
 		}
 	}
 	return nil
@@ -492,6 +581,23 @@ func (c *Config) Warnings() []string {
 		} else if c.Presence.TLS.CAFile == "" {
 			w = append(w, "the presence hub encrypts but does not verify agents: without presence.tls.ca_file "+
 				"the shared token is the only thing an attacker needs to project decoys of their own")
+		}
+	}
+	if len(c.VMs.Decoys) > 0 && c.VMs.Containment == "unenforced" {
+		w = append(w, "full-OS decoys will start with containment unverified: MIRAGE cannot confirm "+
+			"the decoy segment is unable to reach production, and a VM an attacker owns is a real "+
+			"host on your network (docs/04)")
+	}
+	if len(c.VMs.Decoys) > 0 {
+		revertable := 0
+		for _, d := range c.VMs.Decoys {
+			if d.Revert == farm.RevertOnEngagementEnd {
+				revertable++
+			}
+		}
+		if revertable == 0 {
+			w = append(w, "no full-OS decoy is reset after an engagement: each one is single-use, "+
+				"and the next attacker finds the previous one's mess")
 		}
 	}
 	privileged := 0

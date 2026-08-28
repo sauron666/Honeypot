@@ -23,6 +23,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/driverset"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/farm"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/presence"
 	"github.com/sauron666/Honeypot/internal/store"
@@ -42,6 +43,8 @@ type App struct {
 	Tokens     *tokens.Store
 	// Presence is the overlay hub, when the deployment declares agents.
 	Presence *presence.Hub
+	// VMs provisions full-OS decoys, when the deployment declares any.
+	VMs *farm.Provisioner
 
 	log     *slog.Logger
 	started time.Time
@@ -152,6 +155,12 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		return nil, err
 	}
 
+	if len(cfg.VMs.Decoys) > 0 {
+		if err := a.buildVMFarm(cfg, log); err != nil {
+			return nil, err
+		}
+	}
+
 	if len(cfg.Presence.Agents) > 0 {
 		// The farm serves tunnelled connections exactly as it serves bound
 		// ones, so a decoy behind an overlay is not a second kind of decoy.
@@ -166,6 +175,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		Dispatcher: a.Dispatcher, Tokens: a.Tokens, RunningConfig: cfg,
 		Apply:    a.ApplyListeners,
 		Presence: a.Presence,
+		VMs:      a.VMs,
 		Tenant:   cfg.Tenant, Site: cfg.Site,
 		StartedAt: a.started, Log: log, Token: cfg.API.Token,
 	})
@@ -173,6 +183,67 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		return nil, err
 	}
 	return a, nil
+}
+
+// buildVMFarm opens the compute and fabric drivers and assembles the
+// provisioner. It is separate from New because it is the one part of assembly
+// that talks to a hypervisor, and a deployment with no full-OS decoys must not
+// pay for a driver it never uses.
+func (a *App) buildVMFarm(cfg *config.Config, log *slog.Logger) error {
+	name := cfg.Drivers.Compute
+	if name == "" {
+		name = "inproc"
+	}
+	computeInfo, ok := a.Registry.Info(drivers.KindCompute, name)
+	if !ok {
+		return fmt.Errorf("app: unknown compute driver %q", name)
+	}
+	compute, err := a.Registry.Compute(name, resolvePaths(cfg.Drivers.ComputeConfig, cfg.DataDir))
+	if err != nil {
+		return fmt.Errorf("app: compute driver %q: %w", name, err)
+	}
+	if err := compute.Probe(context.Background()); err != nil {
+		// Unlike a sink, this one is fatal: there is nowhere to put the decoys.
+		return fmt.Errorf("app: compute driver %q is not usable: %w", name, err)
+	}
+
+	var fab drivers.FabricDriver
+	if cfg.Drivers.Fabric != "" {
+		fab, err = a.Registry.Fabric(cfg.Drivers.Fabric, cfg.Drivers.FabricConfig)
+		if err != nil {
+			return fmt.Errorf("app: fabric driver %q: %w", cfg.Drivers.Fabric, err)
+		}
+		if err := fab.Probe(context.Background()); err != nil {
+			return fmt.Errorf("app: fabric driver %q is not usable: %w", cfg.Drivers.Fabric, err)
+		}
+		if err := fab.EnsureZones(context.Background(), []drivers.Zone{
+			drivers.ZoneDirty, drivers.ZoneMgmt}); err != nil {
+			log.Warn("app: could not install the containment zones; "+
+				"the assertion below will say whether that matters", "err", err)
+		}
+	}
+
+	a.VMs, err = farm.New(farm.Options{
+		Compute: compute, ComputeInfo: computeInfo, Fabric: fab,
+		ContainmentUnenforced: cfg.VMs.Containment == "unenforced",
+		Publish: func(e *event.Event) {
+			a.ingest(context.Background(), e, true)
+		},
+		Log: log,
+	})
+	if err != nil {
+		return err
+	}
+	for _, d := range cfg.VMs.Decoys {
+		if d.Revert == farm.RevertOnEngagementEnd && !a.VMs.CanRevert() {
+			// Better to say it now than to discover after an intrusion that the
+			// reset the manifest promised was never possible.
+			log.Warn("a full-OS decoy asks to be reset after each engagement, but this compute "+
+				"driver cannot snapshot; it will stay as the attacker left it",
+				"decoy", d.ID, "driver", name)
+		}
+	}
+	return nil
 }
 
 // ApplyListeners reconciles the running farm with a new listener set.
@@ -242,6 +313,18 @@ func (a *App) Start(ctx context.Context) error {
 	if err := a.Farm.Start(ctx); err != nil {
 		return err
 	}
+	if a.VMs != nil {
+		// Before the emulated farm goes live is the right moment: if
+		// containment cannot be verified, nothing should be listening either.
+		changes, err := a.VMs.Reconcile(ctx, a.Config.VMs.Decoys)
+		if err != nil {
+			a.Farm.Close()
+			return err
+		}
+		for _, c := range changes {
+			a.log.Info("full-OS decoy", "id", c.ID, "action", c.Action, "reason", c.Reason)
+		}
+	}
 	if a.Presence != nil {
 		if err := a.Presence.Start(ctx); err != nil {
 			a.Farm.Close()
@@ -271,8 +354,18 @@ func (a *App) sweepLoop(ctx context.Context) {
 		case <-a.sweepCh:
 			return
 		case <-t.C:
-			if n := a.Tracker.Sweep(); n > 0 {
-				a.log.Info("engagements closed after going quiet", "count", n)
+			closed := a.Tracker.SweepClosed()
+			if len(closed) == 0 {
+				continue
+			}
+			a.log.Info("engagements closed after going quiet", "count", len(closed))
+			if a.VMs == nil {
+				continue
+			}
+			// Now, and not before: the attacker has gone quiet, so resetting a
+			// decoy they were in is invisible to them rather than a tell.
+			for _, e := range closed {
+				a.VMs.OnEngagementClosed(ctx, e.Decoys)
 			}
 		}
 	}

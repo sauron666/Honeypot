@@ -27,6 +27,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/farm"
 	"github.com/sauron666/Honeypot/internal/forge"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/presence"
@@ -53,7 +54,9 @@ type Deps struct {
 	// caller because applying needs runtime options the API does not own.
 	Apply func(listeners []honeyd.ListenerConfig) (added, removed []string, err error)
 	// Presence is the overlay hub, when one is configured.
-	Presence  *presence.Hub
+	Presence *presence.Hub
+	// VMs provisions full-OS decoys, when the deployment declares any.
+	VMs       *farm.Provisioner
 	Tenant    string
 	Site      string
 	StartedAt time.Time
@@ -106,6 +109,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/assure", s.runAssurance)
 	s.mux.HandleFunc("POST /api/assure/fingerprint", s.runFingerprint)
 	s.mux.HandleFunc("GET /api/presence", s.presenceAgents)
+	s.mux.HandleFunc("GET /api/vms", s.vmList)
+	s.mux.HandleFunc("POST /api/vms/{id}/burn", s.vmBurn)
+	s.mux.HandleFunc("POST /api/vms/{id}/revert", s.vmRevert)
 	s.mux.HandleFunc("GET /api/config", s.currentConfig)
 	s.mux.HandleFunc("POST /api/config/plan", s.planConfig)
 	s.mux.HandleFunc("POST /api/config/apply", s.applyConfig)
@@ -485,6 +491,66 @@ func (s *Server) presenceAgents(w http.ResponseWriter, r *http.Request) {
 		"enabled": true, "hub": s.deps.Presence.Addr(),
 		"agents": agents, "connected": len(agents),
 	})
+}
+
+// vmList reports the full-OS decoys.
+func (s *Server) vmList(w http.ResponseWriter, r *http.Request) {
+	if s.deps.VMs == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "decoys": []any{}})
+		return
+	}
+	st := s.deps.VMs.Status()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": true, "decoys": st, "count": len(st),
+		"can_revert": s.deps.VMs.CanRevert(),
+	})
+}
+
+// vmBurn takes a decoy out of service and preserves it.
+//
+// This is the button an analyst reaches for when the evidence says the machine
+// is owned. It is deliberately not automatic: deciding that an intrusion has
+// gone far enough to sacrifice a decoy is a judgement, and a platform that made
+// it on its own would eventually make it during a penetration test.
+func (s *Server) vmBurn(w http.ResponseWriter, r *http.Request) {
+	s.vmAction(w, r, "burn")
+}
+
+// vmRevert resets a decoy to its baseline, keeping the dirty state as evidence.
+func (s *Server) vmRevert(w http.ResponseWriter, r *http.Request) {
+	s.vmAction(w, r, "revert")
+}
+
+func (s *Server) vmAction(w http.ResponseWriter, r *http.Request, action string) {
+	if s.deps.VMs == nil {
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": "this deployment has no full-OS decoys"})
+		return
+	}
+	id := r.PathValue("id")
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body)
+	if body.Reason == "" {
+		body.Reason = "requested by an operator"
+	}
+
+	var err error
+	if action == "burn" {
+		err = s.deps.VMs.Burn(r.Context(), id, body.Reason)
+	} else {
+		err = s.deps.VMs.Revert(r.Context(), id, body.Reason)
+	}
+	if errors.Is(err, farm.ErrNotProvisioned) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "action": action, "reason": body.Reason})
 }
 
 func (s *Server) currentConfig(w http.ResponseWriter, r *http.Request) {

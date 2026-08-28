@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,9 +19,11 @@ import (
 	"time"
 
 	"github.com/sauron666/Honeypot/internal/config"
+	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/driverset"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/farm"
 	"github.com/sauron666/Honeypot/internal/forge"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/presence"
@@ -46,6 +49,7 @@ commands:
   fingerprint score how identifiable each decoy is, and say what gives it away
   assure      run the self-test: attack the deployment and verify it detected it
   presence-ca issue the mutual-TLS material for the overlay hub and its agents
+  vms         list full-OS decoys, and burn or reset one during an incident
   status      query a running director over its API
   version     print the version
 
@@ -88,6 +92,8 @@ func main() {
 		err = assureCmd(args)
 	case "presence-ca":
 		err = presenceCA(args)
+	case "vms":
+		err = vmsCmd(args)
 	case "status":
 		err = status(args)
 	case "version":
@@ -152,6 +158,14 @@ func doctor(args []string) error {
 			continue
 		}
 		fmt.Printf("  [ ok ] alert sink %q reachable\n", sc.Driver)
+	}
+
+	// Full-OS decoys are the part of a deployment that can hurt somebody, so
+	// doctor checks the whole chain here rather than leaving it to startup:
+	// the compute driver, the fabric driver, and what the fabric actually says
+	// about containment right now.
+	if len(cfg.VMs.Decoys) > 0 {
+		problems += checkVMFarm(reg, cfg)
 	}
 
 	// Ports are the most common startup failure, so check them before the
@@ -824,4 +838,169 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// vmsCmd is the operator's handle on full-OS decoys.
+func vmsCmd(args []string) error {
+	fs := flag.NewFlagSet("vms", flag.ExitOnError)
+	addr := fs.String("api", "http://127.0.0.1:8422", "director API base URL")
+	token := fs.String("token", "", "bearer token, if the API requires one")
+	burn := fs.String("burn", "",
+		"take this decoy out of service and preserve it as evidence; it is never restarted")
+	revert := fs.String("revert", "",
+		"reset this decoy to its baseline; the attacker's state is snapshotted first")
+	reason := fs.String("reason", "", "why (recorded in the evidence chain)")
+	fs.Parse(args)
+
+	switch {
+	case *burn != "" && *revert != "":
+		return fmt.Errorf("-burn and -revert are opposites; pick one")
+	case *burn != "":
+		return vmAction(*addr, *token, *burn, "burn", *reason)
+	case *revert != "":
+		return vmAction(*addr, *token, *revert, "revert", *reason)
+	}
+
+	body, err := apiGet(*addr+"/api/vms", *token)
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Enabled   bool `json:"enabled"`
+		CanRevert bool `json:"can_revert"`
+		Decoys    []struct {
+			ID         string    `json:"id"`
+			Persona    string    `json:"persona"`
+			Template   string    `json:"template"`
+			State      string    `json:"state"`
+			IPs        []string  `json:"ips"`
+			Baseline   bool      `json:"baseline"`
+			Burned     bool      `json:"burned"`
+			BurnReason string    `json:"burn_reason"`
+			Revert     string    `json:"revert"`
+			LastRevert time.Time `json:"last_revert"`
+		} `json:"decoys"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return fmt.Errorf("unexpected response: %w", err)
+	}
+	if !resp.Enabled {
+		fmt.Println("This deployment has no full-OS decoys.")
+		fmt.Println("They are declared under `vms:` and need a compute driver that can run them")
+		fmt.Println("(libvirt or podman) plus a fabric driver to verify containment.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tPERSONA\tSTATE\tBASELINE\tRESET\tADDRESSES\tNOTE")
+	for _, d := range resp.Decoys {
+		note := ""
+		if d.Burned {
+			note = "BURNED: " + d.BurnReason
+		} else if !d.Baseline {
+			note = "no baseline; cannot be reset"
+		} else if !d.LastRevert.IsZero() {
+			note = "last reset " + d.LastRevert.Format(time.RFC3339)
+		}
+		reset := d.Revert
+		if reset == "" {
+			reset = "never"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%v\t%s\t%s\t%s\n",
+			d.ID, d.Persona, d.State, d.Baseline, reset, strings.Join(d.IPs, ","), note)
+	}
+	w.Flush()
+
+	if !resp.CanRevert {
+		fmt.Println("\nThis compute driver cannot snapshot, so no decoy here can be reset.")
+	}
+	return nil
+}
+
+func vmAction(addr, token, id, action, reason string) error {
+	payload, _ := json.Marshal(map[string]string{"reason": reason})
+	body, err := apiDo(http.MethodPost,
+		fmt.Sprintf("%s/api/vms/%s/%s", addr, url.PathEscape(id), action), token, payload)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s: %s\n", action, strings.TrimSpace(string(body)))
+	if action == "burn" {
+		fmt.Println("The decoy is stopped, isolated where the fabric driver can, and kept as it is.")
+		fmt.Println("It will not be restarted or reset: it is the forensic artefact now.")
+	}
+	return nil
+}
+
+// checkVMFarm verifies everything a full-OS decoy depends on, and reports the
+// live containment verdict rather than the configured intention.
+func checkVMFarm(reg *drivers.Registry, cfg *config.Config) int {
+	problems := 0
+	ctx := context.Background()
+
+	name := cfg.Drivers.Compute
+	if name == "" {
+		name = "inproc"
+	}
+	info, ok := reg.Info(drivers.KindCompute, name)
+	if !ok {
+		fmt.Printf("  [FAIL] full-OS decoys: unknown compute driver %q\n", name)
+		return problems + 1
+	}
+	if !info.Has(drivers.CapFullOS) {
+		fmt.Printf("  [warn] %d full-OS decoy(s) declared, but the %q compute driver does not "+
+			"run full operating systems\n", len(cfg.VMs.Decoys), name)
+		problems++
+	}
+	compute, err := reg.Compute(name, cfg.Drivers.ComputeConfig)
+	if err != nil {
+		fmt.Printf("  [FAIL] compute driver %q: %v\n", name, err)
+		return problems + 1
+	}
+	if err := compute.Probe(ctx); err != nil {
+		fmt.Printf("  [FAIL] compute driver %q is not usable here: %v\n", name, err)
+		problems++
+	} else {
+		fmt.Printf("  [ ok ] compute driver %q reachable for %d full-OS decoy(s)\n",
+			name, len(cfg.VMs.Decoys))
+	}
+	if !info.Has(drivers.CapSnapshot) || !info.Has(drivers.CapRevert) {
+		for _, d := range cfg.VMs.Decoys {
+			if d.Revert == farm.RevertOnEngagementEnd {
+				fmt.Printf("  [warn] %q asks to be reset after each engagement, but %q cannot "+
+					"snapshot; it will stay as the attacker left it\n", d.ID, name)
+				problems++
+			}
+		}
+	}
+
+	if cfg.Drivers.Fabric == "" {
+		fmt.Println("  [warn] containment is unenforced by configuration: nothing here can tell " +
+			"you whether a decoy can reach production")
+		return problems + 1
+	}
+	fab, err := reg.Fabric(cfg.Drivers.Fabric, cfg.Drivers.FabricConfig)
+	if err != nil {
+		fmt.Printf("  [FAIL] fabric driver %q: %v\n", cfg.Drivers.Fabric, err)
+		return problems + 1
+	}
+	if err := fab.Probe(ctx); err != nil {
+		fmt.Printf("  [FAIL] fabric driver %q is not usable here: %v\n", cfg.Drivers.Fabric, err)
+		return problems + 1
+	}
+	violations, err := fab.AssertContainment(ctx)
+	if err != nil {
+		fmt.Printf("  [FAIL] containment could not be verified: %v\n", err)
+		return problems + 1
+	}
+	if len(violations) > 0 {
+		for _, v := range violations {
+			fmt.Printf("  [FAIL] containment: %s\n", v)
+			problems++
+		}
+		fmt.Println("         full-OS decoys will refuse to start until this is fixed.")
+		return problems
+	}
+	fmt.Printf("  [ ok ] containment verified by %q\n", cfg.Drivers.Fabric)
+	return problems
 }

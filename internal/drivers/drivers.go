@@ -356,6 +356,32 @@ func (r *Registry) Compute(name string, cfg map[string]any) (ComputeDriver, erro
 	return c, nil
 }
 
+// Info returns the declared metadata for one registered driver. Callers need
+// it to decide what a driver can do before opening it -- capabilities are the
+// contract, not the driver's name (ADR-008).
+func (r *Registry) Info(kind Kind, name string) (Info, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	reg, ok := r.factories[key(kind, name)]
+	if !ok {
+		return Info{}, false
+	}
+	return reg.info, true
+}
+
+// Fabric opens a fabric driver with the right static type.
+func (r *Registry) Fabric(name string, cfg map[string]any) (FabricDriver, error) {
+	d, err := r.Open(KindFabric, name, cfg)
+	if err != nil {
+		return nil, err
+	}
+	f, ok := d.(FabricDriver)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s is not a FabricDriver", ErrWrongKind, name)
+	}
+	return f, nil
+}
+
 // Sink opens a sink driver with the right static type.
 func (r *Registry) Sink(name string, cfg map[string]any) (SinkDriver, error) {
 	d, err := r.Open(KindSink, name, cfg)

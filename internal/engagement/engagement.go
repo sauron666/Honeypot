@@ -151,19 +151,26 @@ func (t *Tracker) Observe(e *event.Event) {
 }
 
 // Sweep closes engagements that have gone quiet. Call it periodically.
-func (t *Tracker) Sweep() int {
+func (t *Tracker) Sweep() int { return len(t.SweepClosed()) }
+
+// SweepClosed closes quiet engagements and returns them.
+//
+// The caller needs the engagements themselves, not a count: resetting a full-OS
+// decoy is driven by the attacker leaving it, and doing that while they are
+// still inside is the single most obvious tell a deception platform can give.
+func (t *Tracker) SweepClosed() []*Engagement {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
-	n := 0
+	var closed []*Engagement
 	for ip, e := range t.active {
 		if now.Sub(e.LastSeen) > t.idleTimeout {
 			t.closeLocked(e, now)
 			delete(t.active, ip)
-			n++
+			closed = append(closed, e)
 		}
 	}
-	return n
+	return closed
 }
 
 func (t *Tracker) closeLocked(e *Engagement, now time.Time) {

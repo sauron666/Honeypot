@@ -6,6 +6,7 @@ package driverset
 import (
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/drivers/compute"
+	"github.com/sauron666/Honeypot/internal/drivers/fabric"
 	"github.com/sauron666/Honeypot/internal/drivers/sink"
 )
 
@@ -18,6 +19,13 @@ func Default() *drivers.Registry {
 	r.Register(compute.InprocInfo(), compute.NewInproc)
 	r.Register(compute.PodmanInfo(), compute.NewPodman)
 	r.Register(compute.LibvirtInfo(), compute.NewLibvirt)
+
+	// Fabric: two drivers that answer different questions. nftables reads and
+	// writes the intent; probe tests what a packet actually reaches. A
+	// deployment where they disagree is the one that turns a honeypot into a
+	// beachhead, and only running both finds it.
+	r.Register(fabric.NftablesInfo(), fabric.NewNftables)
+	r.Register(fabric.ProbeInfo(), fabric.NewProbe)
 
 	// Sinks.
 	r.Register(sink.StdoutInfo(), sink.NewStdout)

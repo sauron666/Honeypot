@@ -120,6 +120,26 @@ MIRAGE_PRESENCE_TOKEN=... ./bin/mirage-presence \
 токен: токен, прочетен от компрометиран агент, не стига, за да проектира някой
 свои примамки. `ca.key` не напуска хъба.
 
+Пълни VM примамки (профил P4) — истински машини, не емулация. Затова и въпросът
+за изолацията тук не е чекбокс: примамка, която атакуващият превземе, е истински
+хост в мрежата. Нищо не тръгва, преди containment да е **проверен**, а не приет:
+
+```bash
+./bin/miragectl doctor --config profiles/p4-fullvm.yaml   # проверява и живите правила
+./bin/miragectl vms                                       # какво върви и какво е изгорено
+./bin/miragectl vms -burn vm-fs01 -reason "root чрез sudo CVE"
+```
+
+`burn` спира примамката, изолира я (ако fabric драйверът може) и **никога** не я
+връща в строя: тя вече е доказателството. `revert` връща примамката към чистия
+baseline, но първо снимка на мръсното състояние — reset, който трие каквото
+атакуващият е инсталирал, превръща пробива в анекдот.
+
+Два fabric драйвера, защото отговарят на различни въпроси: `nftables` чете и
+пише намерението (правилата), `probe` проверява реалността (какво наистина
+стига пакет от примамката). Внедряване, в което двете не съвпадат, е точно това,
+което превръща honeypot-а в плацдарм.
+
 И най-важното — примамката пише детекциите за реалната мрежа:
 
 ```bash
@@ -136,6 +156,8 @@ MIRAGE_PRESENCE_TOKEN=... ./bin/mirage-presence \
 | `internal/bus` | шина със subject matching; бавен consumer не блокира примамка |
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
 | `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
+| `internal/drivers/fabric` | `nftables` (налага и проверява), `probe` (проверява реалността, не правилата) |
+| `internal/farm` | **пълни VM примамки**: provisioner, baseline snapshot, reset след engagement, **burn** (запазва компрометираната машина като доказателство) |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424), `elastic`, `splunk` |
 | `internal/honeyd` | 15 протокола: **ssh** (истински), **ldap** (фалшив AD), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
 | `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран дял с canary файлове), `windows/dc` (фалшива AD с kerberoast/AS-REP/ADCS/LAPS примамки) |
@@ -148,17 +170,21 @@ MIRAGE_PRESENCE_TOKEN=... ./bin/mirage-presence \
 | `internal/presence` | **overlay режим**: примамки в чужд сегмент без промяна на мрежата; **взаимен TLS** + собствен CA |
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
 | `cmd/mirage-presence` | Presence Agent — поема свободни адреси и тунелира към хъба |
-| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, **presence-ca**, status |
+| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, **presence-ca**, **vms**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
 (`test/e2e`), всичко под `-race`.
 
 ## Какво НЕ работи още
 
-Няма VMI observer, няма пълни VM примамки (libvirt/proxmox драйверите ги има,
-но нищо още не ги ползва), няма Kerberos KDC (AS-REP и
-kerberoast се засичат при изброяването през LDAP, не при самото искане на
-тикет), няма Life Engine (синтетични потребители).
+Няма VMI observer. Няма Kerberos KDC (AS-REP и kerberoast се засичат при
+изброяването през LDAP, не при самото искане на тикет). Няма Life Engine
+(синтетични потребители).
+
+Пълните VM примамки са реализирани откъм платформата — provisioner, containment
+gate, baseline, reset, burn — но **самите образи не се доставят**. Профил P4
+очаква libvirt шаблони, които вече съществуват на хоста; MIRAGE ги клонира, не
+ги строи. Има и `proxmox` драйвер в плана, но още го няма.
 
 SMB покрива negotiate, session setup (с улов на NetNTLMv2) и tree connect;
 файловите операции връщат ACCESS_DENIED. Сервирането на файлове по SMB2

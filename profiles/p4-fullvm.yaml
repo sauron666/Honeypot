@@ -1,0 +1,137 @@
+# Profile P4 - full-OS decoys
+#
+# Everywhere else in MIRAGE the decoys are emulated: they answer convincingly
+# and can never be owned, because there is nothing behind them to own. Here they
+# are real machines. That is what makes them indistinguishable from a production
+# host -- and it is also why this profile asks harder questions than the others.
+#
+# An attacker who takes one of these has a real host, with a real network stack,
+# inside the estate. Everything below exists to make sure that is a dead end.
+#
+#   miragectl doctor --config profiles/p4-fullvm.yaml
+#   mirage-director  --config profiles/p4-fullvm.yaml
+#   miragectl vms                        # what is running, and what is burned
+#   miragectl vms -burn vm-fs01 -reason "attacker gained root"
+#
+# Requires: libvirt/KVM with the templates below already defined, and either
+# nftables on this host or an accepted answer to the containment question.
+
+tenant: default
+site: dc-north
+
+data_dir: /var/lib/mirage
+
+api:
+  listen: 127.0.0.1:8422
+
+drivers:
+  compute: libvirt
+  compute_config:
+    uri: qemu:///system
+
+  # Containment is not a checkbox. nftables installs and then re-reads the rules
+  # that keep decoy traffic away from production; `probe` (below, as an
+  # alternative) instead tests what a packet actually reaches. They answer
+  # different questions and a deployment where they disagree is exactly the one
+  # that turns a honeypot into a beachhead.
+  fabric: nftables
+  fabric_config:
+    # The networks a decoy must never reach. There is no default on purpose:
+    # a containment check with a guessed scope reports a success it has not
+    # earned. List yours.
+    protected:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+    decoy_networks:
+      - 10.66.0.0/24
+
+  # The alternative, for a network MIRAGE does not control -- a cloud VPC, a
+  # customer site, anywhere nft cannot run. It enforces nothing and verifies
+  # everything, by trying the connections that must fail:
+  #
+  # fabric: probe
+  # fabric_config:
+  #   targets:
+  #     - dc01.corp.example:389
+  #     - backup01.corp.example:445
+  #     - 10.0.4.20:3306
+  #   timeout: 2s
+
+vms:
+  # "" or "verified" (the default) requires a fabric driver. "unenforced" is you
+  # saying you contain the decoy segment by other means and accept that MIRAGE
+  # cannot check it. There is no third answer.
+  containment: verified
+
+  decoys:
+    # A file server worth ransoming. Full-OS because the interesting behaviour
+    # of a real encryptor -- shadow copy deletion, service enumeration, the
+    # order it walks a share in -- only happens against a real Windows stack.
+    - id: vm-fs01
+      persona: linux/fileserver
+      template: debian12-fileserver
+      cpus: 2
+      memory_mb: 4096
+      segment: dirty
+      # Reset once the attacker has gone quiet, never while they are still in
+      # it: a host that reboots itself mid-session is the clearest tell there is.
+      revert: on_engagement_end
+
+    - id: vm-web01
+      persona: linux/web
+      template: debian12-web
+      cpus: 2
+      memory_mb: 2048
+      segment: dirty
+      revert: on_engagement_end
+
+    # Left exactly as the attacker leaves it, for an analyst to walk live.
+    - id: vm-jump01
+      persona: linux/backup
+      template: debian12-jump
+      cpus: 2
+      memory_mb: 2048
+      segment: dirty
+      revert: never
+
+honeyd:
+  bind: 10.66.0.10
+  max_session_duration: 45m
+
+  # Emulated decoys alongside the real ones. They cost nothing, they cover the
+  # rest of the segment, and they are the ones that can never be owned.
+  decoys:
+    - id: dcy-dc01
+      persona: windows/dc
+      services:
+        - service: ldap
+          port: 389
+        - service: smb
+          port: 445
+
+    - id: dcy-db01
+      persona: linux/db
+      services:
+        - service: mysql
+          port: 3306
+        - service: ssh
+          port: 22
+
+engagement:
+  idle_timeout: 30m
+
+alerts:
+  min_severity: high
+  sinks:
+    - driver: stdout
+    - driver: file
+      config:
+        path: alerts.jsonl
+
+tokens:
+  base_url: http://10.66.0.10:8081
+
+storage:
+  memory_window: 500000
+  sync_every: 1
