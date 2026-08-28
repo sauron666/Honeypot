@@ -1,6 +1,36 @@
 # 02 — Компоненти
 
-Всеки компонент е отделен процес/бинар. Комуникация: gRPC (control) + NATS (data).
+> **Бележка за текущото състояние:** този документ е проектен план, писан преди
+> имплементацията. Много от описаните компоненти вече са готови, но архитектурата
+> се опрости в процеса: **един бинар** (`mirage-director`) вместо микроуслуги,
+> in-process шина вместо NATS, JSONL hash chain вместо Postgres/ClickHouse.
+>
+> **Какво е реализирано и къде:**
+>
+> | Компонент по план | Реален пакет | Статус |
+> |---|---|---|
+> | mirage-director | `cmd/mirage-director` + `internal/app` | ✅ |
+> | mirage-provisioner | `internal/farm` | ✅ (provisioner + containment + burn) |
+> | mirage-observer | `internal/drivers/observer` | ◐ (parsing/mapping; hypervisor-glue остава) |
+> | mirage-tap | — | ✗ отложен |
+> | mirage-gateway | — | ✗ отложен (containment чрез fabric drivers) |
+> | mirage-honeyd | `internal/honeyd` | ✅ (17 протокола, включително kerberos и mcp) |
+> | mirage-tokens | `internal/tokens` | ✅ (10 типа + prompt canary) |
+> | mirage-breadcrumbs | `internal/breadcrumbs` + `cmd/mirage-breadcrumbs` | ✅ |
+> | mirage-brain | `internal/engagement` + `internal/toolkit` | ✅ (stitching + toolkit DB) |
+> | mirage-forge | `internal/forge` | ✅ |
+> | mirage-presence | `internal/presence` + `cmd/mirage-presence` | ✅ (+ mTLS + CA) |
+> | mirage-graph | `internal/graph` | ✅ |
+> | mirage-assure | `internal/assure` | ✅ |
+> | mirage-life | `internal/life` | ✅ |
+> | mirage-jit | `internal/honeyd/jit.go` | ✅ |
+> | mirage-watermark | `internal/watermark` | ✅ |
+> | mirage-comply | `internal/compliance` | ✅ |
+>
+> Долу е оригиналният проектен план за справка.
+
+Всеки компонент в плана е отделен процес/бинар. В практиката повечето живеят
+в един процес (`mirage-director`); разделянето е по Go пакети, не по бинари.
 
 ---
 

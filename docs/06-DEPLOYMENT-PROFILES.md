@@ -13,7 +13,7 @@ containment и мащаб. `miragectl init --profile <name>` дава работ
 |---|---|
 | Compute | `none` — един бинар/контейнер, само L0–L2 |
 | Fabric | overlay (Presence Agent) или един NIC в съществуващ VLAN |
-| Обхват | 1 сегмент, ~50 виртуални IP, 12 протокола, honeytokens |
+| Обхват | 1 сегмент, ~50 виртуални IP, **17 протокола** (вкл. Kerberos KDC и MCP), honeytokens |
 | Ресурс | 2 vCPU, 2 GB, 20 GB |
 | Containment | `sinkhole`, без изходящ достъп |
 | Стойност | сигнал с нулев false positive за 10 минути работа |

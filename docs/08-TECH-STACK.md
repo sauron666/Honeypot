@@ -4,16 +4,10 @@
 
 | Слой | Технология | Причина |
 |---|---|---|
-| Control plane, услуги | **Go 1.23+** | един статичен бинар, отличен concurrency, лесен on-prem deploy |
-| Hot-path capture, VMI бридж | **Rust** (+ C FFI към libvmi) | zero-copy, без GC паузи при 10 Gbps / syscall поток |
-| Анализ, ML, парсери | **Python 3.12** (plugin sandbox) | екосистема (Volatility3, YARA, dpkt, scapy) |
-| UI | **TypeScript + React + Vite**, TanStack Query, Tailwind | стандарт, бърз |
-| Състояние | **PostgreSQL 16** | транзакции, релации |
-| Телеметрия | **ClickHouse** | 10^9 реда, компресия, бързи агрегации |
-| Обекти | **MinIO** (S3, object-lock) | WORM за evidence |
-| Шина | **NATS JetStream** | лек, store-and-forward, mTLS, за appliance |
-| Кеш/state | **Redis** | rate limits, escalation broker |
-| Мрежов анализ | **Suricata**, **Zeek** | не преоткриваме колелото |
+| Control plane, всичко | **Go 1.24** | един статичен бинар, отличен concurrency, лесен on-prem deploy; **единственият език днес** — Rust/Python/React са отложени |
+| Шина | in-process (`internal/bus`) | publish/subscribe с subject matching; достатъчно за единичен процес |
+| Състояние | **append-only JSONL + SHA-256 hash chain** | tamper-evident, не зависи от БД; streaming verification |
+| UI | **вградена конзола** (HTML/JS в бинара, strict CSP) | без Node, без build step, без CDN |
 | VMI | **libvmi / DRAKVUF** | единственият сериозен agentless подход върху KVM |
 | Виртуализация | **Proxmox VE API / libvirt** | целевата среда |
 | Образи | **Packer** + Ansible | възпроизводими golden templates |
@@ -24,66 +18,55 @@
 - Kafka (тежък за appliance) · Kubernetes като изискване (усложнява on-prem) ·
   Cowrie/Dionaea като дефолт (фингърпринтваеми) · LLM в решаващия път за alerting.
 
-## 2. Структура на репото
+## 2. Структура на репото (реална, към последния commit)
 
 ```
-mirage/
-├── cmd/                        # точки за вход (по един бинар на компонент)
-│   ├── mirage-director/
-│   ├── mirage-provisioner/
-│   ├── mirage-tap/
-│   ├── mirage-gateway/
-│   ├── mirage-honeyd/
-│   ├── mirage-tokens/
-│   ├── mirage-brain/
-│   ├── mirage-forge/
-│   ├── mirage-breadcrumbs/     # агент (Win/Lin/Mac)
-│   ├── mirage-presence/        # Presence Agent (overlay режим)
-│   ├── mirage-graph/           # attack path deception
-│   ├── mirage-assure/          # fingerprint + deception assurance
-│   └── miragectl/              # CLI (plan/apply/destroy)
+Honeypot/
+├── cmd/                            # бинари
+│   ├── mirage-director/            # главният процес
+│   ├── miragectl/                  # CLI: doctor, plan, apply, verify, events, forge, assure, fingerprint, presence-ca, vms, economics, status
+│   ├── mirage-presence/            # Presence Agent (overlay режим)
+│   └── mirage-breadcrumbs/         # засява следи на реални endpoint-и
 ├── internal/
-│   ├── event/                  # OCSF схема, валидация, hash chain
-│   ├── bus/                    # NATS абстракция
-│   ├── store/                  # postgres, clickhouse, minio
-│   ├── engagement/             # stitching, жизнен цикъл
-│   ├── attack/                 # ATT&CK mapping
-│   ├── policy/                 # containment политики (hard-coded предпазители)
-│   ├── drivers/                # ★ ОСЕМТЕ АБСТРАКЦИИ — единственото място с вендори
-│   │   ├── compute/            # libvirt, proxmox, podman, vsphere, hyperv, cloud
-│   │   ├── fabric/             # nftables, ovs, opnsense, cisco, cloud-sg
-│   │   ├── nac/                # radius, freeradius, ise, clearpass
-│   │   ├── identity/           # ad, adcs, entra, okta, freeipa, keycloak
-│   │   ├── observer/           # vmi, ebpf, netrecon, agent, snapshot
-│   │   ├── forensics/          # velociraptor, wazuh, grr, edr-api
-│   │   ├── sink/               # syslog, elastic, splunk, sentinel, thehive
-│   │   └── intel/              # misp, opencti, stix
-│   ├── protocols/              # емулатори по протокол
-│   ├── recon/                  # реконструктори: ssh, rdp, smb, http
-│   ├── deception/              # tokens, breadcrumbs, personas, content gen
-│   ├── life/                   # Life Engine
-│   ├── dac/                    # Deception-as-Code: plan/apply/drift
-│   ├── persona/                # персони, i18n, генератори на съдържание
-│   ├── ransomware/             # детекция, tarpit, key capture
-│   └── export/                 # siem, stix, sigma, yara
-├── observer/                   # Rust + C: libvmi/DRAKVUF бридж
-│   ├── src/
-│   └── ffi/
-├── analytics/                  # Python plugins (sandboxed)
-├── web/                        # React UI
-├── profiles/                   # профили на внедряване (P0..P7) + референтни карти
-├── packs/                      # общностни Deception Packs (персони, lures)
-├── plugin-sdk/                 # gRPC plugin SDK + примери
-├── templates/                  # Packer + Ansible за golden images
-│   ├── win11-corp/ winsrv2022-file/ deb12-web/ nas-appliance/
-├── deploy/
-│   ├── compose/ systemd/ iso/ helm/
-├── docs/                       # тази документация
+│   ├── event/                      # OCSF схема, ULID, канонична сериализация, hash chain
+│   ├── store/                      # append-only JSONL evidence file, streaming verification
+│   ├── bus/                        # in-process pub/sub с subject matching
+│   ├── engagement/                 # stitching, жизнен цикъл, risk score, economics
+│   ├── alert/                      # severity gate, дедупликация, маркер за synthetic
+│   ├── honeyd/                     # 17 емулирани протокола + персони + VFS + shell + JIT
+│   ├── tokens/                     # 10 типа honeytokens + callback + watcher + .docx + prompt canary
+│   ├── breadcrumbs/                # следи на реални endpoint-и (10 вида) + обратим плантер
+│   ├── presence/                   # overlay: хъб + агент + мултиплексиран тунел + взаимен TLS + CA
+│   ├── farm/                       # пълни VM примамки: provisioner, containment gate, burn, revert
+│   ├── life/                       # синтетичен живот: f(seed, now) → логини, логове, lastLogon
+│   ├── graph/                      # attack path deception: Dijkstra, coverage, suggest
+│   ├── toolkit/                    # attacker toolkit DB: 12 сигнатури + prediction
+│   ├── forge/                      # авто-Sigma/Suricata/YARA/STIX + инцидентен доклад
+│   ├── assure/                     # самотест + Detectability Score (fingerprint)
+│   ├── ransomware/                 # 6 сигнала + tarpit + извличане на контакти от бележката
+│   ├── compliance/                 # NIS2/DORA/ISO/PCI/SOC2/IEC 62443: 20 контроли, Markdown отчет
+│   ├── watermark/                  # 3 техники (zero-width, whitespace, DocID) + extract
+│   ├── config/                     # YAML манифест, валидация, plan диф
+│   ├── app/                        # сглобяване на deployment (bin + e2e ползват него)
+│   ├── api/                        # REST API + вградена конзола (strict CSP)
+│   │   └── web/                    # index.html, app.js, style.css
+│   ├── version/                    # build info
+│   ├── drivers/                    # ★ драйверни абстракции (ADR-008)
+│   │   ├── compute/                # inproc, podman, libvirt, proxmox
+│   │   ├── fabric/                 # nftables, probe
+│   │   ├── observer/               # none, drakvuf (parsing/mapping готови)
+│   │   ├── sink/                   # stdout, file, webhook, syslog, elastic, splunk
+│   │   ├── identity/               # (празен — бъдещ)
+│   │   └── (nac, forensics, intel) # (празни — бъдещи)
+│   └── driverset/                  # регистрация на вградените драйвери
+├── profiles/                       # p0-box.yaml, p3-mssp-overlay.yaml, p4-fullvm.yaml, breadcrumbs.example.yaml
+├── docs/                           # 00-11 + ADR
+│   └── adr/                        # ADR-001,004,007,008,009,010
 ├── test/
-│   ├── e2e/                    # пълни атакови сценарии
-│   ├── redteam/                # honeypot-detection тестове (CI gate)
-│   └── corpus/                 # реални протоколни отговори за сравнение
-└── tools/
+│   └── e2e/                        # пълен атакови сценарий + build constraint guard
+├── go.mod, go.sum
+├── CLAUDE.md                       # трайно състояние на проекта за AI сесии
+└── README.md
 ```
 
 ## 3. Инженерни стандарти

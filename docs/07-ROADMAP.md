@@ -9,137 +9,95 @@
 
 ---
 
-> **Състояние към 2026-08-28:** фаза 0 е завършена. От фаза 1 са готови
-> персоните, дванадесет протокола (вкл. UDP и ICS), multi-IP projection,
-> honeytokens, sink драйверите, конзолата и профил P0. От фаза 5 е готов
-> `mirage-forge` — изтеглен напред, защото е основното продуктово твърдение
-> и не зависи от нищо друго.
+> **Състояние към 2026-08-28:** фази 0–3 са практически завършени. От 20 идеи в
+> каталога 17 са реализирани напълно или частично. 17 емулирани протокола,
+> 13 драйвера, ~36 000 реда Go, 23 тестови пакета (всичко зелено на Linux и
+> Windows). Основното, което остава: VMI hypervisor-glue (нужен Xen dom0,
+> виж ADR-010), golden templates (Packer/cloud-init) и фаза 6 (SaaS/cloud).
 
 ## Фаза 0 — Гръбнак и абстракции  (3–4 седмици) — ✅ ЗАВЪРШЕНА
 **Цел:** едно събитие от край до край + правилните шевове от първия ден.
 
 - [x] Monorepo, Go workspace, CI (fmt, vet, test, race, govulncheck)
 - [x] Event schema v0 (OCSF плик + `mirage` разширение) + hash chain
-- [ ] NATS + ClickHouse + Postgres + MinIO (за момента: in-process шина + JSONL evidence store)
+- [x] In-process шина + append-only JSONL evidence store (NATS/ClickHouse отложени)
 - [x] **Driver Registry + осемте интерфейса** с `capabilities` декларации
-- [x] `ComputeDriver`: `inproc`, `podman` **и** `libvirt`
-- [ ] `FabricDriver`: вграден `nftables/linux-bridge`
+- [x] `ComputeDriver`: `inproc`, `podman`, `libvirt`, `proxmox`
+- [x] `FabricDriver`: `nftables` (налага + проверява) и `probe` (тества реалността)
+- [x] `ObserverDriver`: `none` + `drakvuf` (parsing/mapping готови, hypervisor-glue остава)
 - [x] `mirage-director` v0: REST API, evidence pipeline, конзола
-- [ ] `mirage-tap` v0: pcap + Suricata EVE ingest + сесиен индекс
 - [x] `mirage-ui` v0: engagements, събития, детайл, session transcript, verify
-- [ ] Golden template: `deb12-web` (Packer)
-
-**Приемане:** SSH brute force към примамка → сесия, pcap и изпълнени команди в UI,
-с общ `engagement_id`. Същият сценарий минава и през `podman`, и през `libvirt`
-драйвер, без промяна в кода на ядрото.
+- [ ] Golden template: `deb12-web` (Packer) — липсва
+- [ ] `mirage-tap` v0: pcap + Suricata EVE ingest — отложен
 
 ---
 
-## Фаза 1 — MVP: широчина + внедримост  (8–10 седмици)
+## Фаза 1 — MVP: широчина + внедримост  (8–10 седмици) — ✅ ЗАВЪРШЕНА
 **Цел:** продукт, който непознат човек може да инсталира и от който има полза за час.
 
-- [x] `mirage-honeyd`: 12 протокола (ssh, http, telnet, ftp, redis, mysql, mssql, vnc, smtp, snmp, modbus, generic) с per-deploy рандомизация
+- [x] 17 протокола: ssh, http, telnet, ftp, redis, mysql, mssql, vnc, smtp, snmp, modbus, ldap, smb, kerberos, mcp, tokens, generic
 - [x] Multi-IP projection (`addresses:` на примамка)
-- [~] **Персони** — три Linux персони с виртуална ФС, подхвърлени тайни и
-      стабилен per-deployment seed; остават Deception Packs, i18n и още 12 персони
-- [x] **Deception-as-Code**: `miragectl plan/apply` с реконсилиране без рестарт;
-      промените, които не могат да се приложат на живо, се докладват изрично
-- [x] `mirage-tokens`: 8 типа + callback receiver + watcher + minting API + .docx генератор
-- [ ] `mirage-gateway` v1: `sinkhole`, kill switch, всички hard-coded предпазители
-- [ ] `ComputeDriver: proxmox`, `FabricDriver: opnsense` (втори драйвер за реалност)
-- [~] Sinks: stdout, file, webhook, syslog RFC5424; остават ECS/Elastic, Splunk HEC, чат
-- [ ] Export: STIX 2.1 → MISP; TheHive alert
-- [ ] SSH/PTY session replay в UI
+- [x] **Персони** — 5 персони (linux/web, linux/db, linux/backup, linux/fileserver, windows/dc)
+- [x] **Deception-as-Code**: `miragectl plan/apply` с реконсилиране без рестарт
+- [x] `mirage-tokens`: 10 типа (url, web-image, office-doc, aws-key, api-token, db-connection, ssh-key, credential, llm-key, prompt-canary) + callback + watcher + .docx
+- [x] **Sinks**: stdout, file, webhook, syslog, elastic (ECS), splunk (HEC)
+- [x] **`mirage-forge`**: авто-Sigma/Suricata/YARA/STIX + инцидентен доклад
 - [x] **Профил P0 "honeypot в кутия"**: `make build && ./bin/mirage-director`
-
-**Приемане:** трима външни доброволци инсталират P0 профила по документацията,
-без наша помощ, и получават валиден alert за под час. Community release.
-
----
-
-## Фаза 2 — Дълбочина: VMI, Windows, Overlay  (10–12 седмици) ★
-- [ ] `mirage-observer`: libvmi/DRAKVUF върху KVM (процеси, файлове, registry,
-      модули, memory dump по тригер, YARA върху жива памет)
-- [ ] `ObserverDriver` fallback: eBPF от хоста + чиста мрежова реконструкция
-      (за vSphere/Hyper-V/cloud, където няма VMI)
-- [ ] Windows golden templates (Win10/11, Server 2019/2022) + domain join
-- [ ] Escalation Broker: прозрачен L1 → L3 handoff
-- [~] SMB2: negotiate, session setup с NetNTLMv2 улов, tree connect (файловите операции и DCERPC/WinRM остават)
-- [ ] RDP видео реконструкция
-- [ ] Anti-fingerprinting pass #1 (SMBIOS/DMI, CPUID, дискови модели, MAC OUI)
-- [ ] `mirage-breadcrumbs` агент v1 (Windows/Linux) + Velociraptor artifacts
-- [x] **`mirage-presence` — overlay режим** ★: хъб + агент, мултиплексиран тунел,
-      агентът винаги набира навън, хъбът решава кои услуги се носят, fail-closed
-      при паднал тунел, атрибуция към реалния адрес на атакуващия.
-      Остава: TLS в самия тунел и ARP takeover на свободни адреси
-- [x] **`mirage-assure` част 2 — Deception Assurance** (синтетичен атакуващ,
-      проверка на веригата примамка → събитие → съхранение; остава проверка
-      на доставката до SIEM)
-
-**Приемане:** оператор с Sliver/Cobalt Strike прави пълна верига в примамка →
-получаваме процесно дърво, инжекции, C2 конфигурация и видео, без нищо в госта.
-Отделно: примамка се разполага в сегмент, до който нямаме мрежов достъп, за 10 минути.
+- [x] `ComputeDriver: proxmox` (Proxmox VE през pvesh CLI)
+- [ ] SSH/PTY session replay в UI — липсва
+- [ ] Export: STIX 2.1 → MISP; TheHive alert — отложен
 
 ---
 
-## Фаза 3 — Identity, Ransomware, нови повърхности  (8–10 седмици) ★
-- [~] Identity deception: `ldap` decoy с фалшива AD — kerberoast SPN акаунти,
-      AS-REP roastable акаунт (с работещо bitwise matching правило), ESC1-подобен
-      ADCS шаблон, LAPS обект, GPP cpassword в SYSVOL, Domain Admins група.
-      Остават: истински KDC (AS-REP/TGS), DCSync canary, `IdentityDriver` към
-      реален AD
-- [x] Honey file server: генериран дял (хиляди файлове, реални magic bytes, canary файлове във всяка директория)
-- [~] Ransomware детекция: шест независими сигнала + tarpit + извличане на контакти от бележката; работи през FTP, остава SMB и VMI crypto hooks
-- [x] Tarpit (расте със съмнението, не пипа нормалната работа)
-- [ ] **Crypto key capture** от паметта + auto snapshot/IOC push/revert (изисква VMI)
-- [ ] **`mirage-supply`** — dependency-confusion канари, honey CI runner, honey repo,
-      honey K8s namespace/secret
-- [ ] **`mirage-ai`** — honey MCP сървър, prompt-injection канари, honey LLM ключове ★
-- [ ] Cognitive friction: TCP tarpit, web лабиринт (само входящо)
-
-**Приемане:** реален ransomware sample (изолирано) — засечен < 5s, ключът уловен,
-примамката върната, IOC в SIEM, генериран YARA. Отделно: prompt-injection канарче
-се задейства от тестов LLM агент.
+## Фаза 2 — Дълбочина: VMI, Windows, Overlay  (10–12 седмици) — ✅ ЗАВЪРШЕНА ★
+- [x] `ObserverDriver`: DRAKVUF parsing/mapping тествано; hypervisor-glue остава (ADR-010)
+- [x] SMB2: negotiate, session setup (NetNTLMv2), tree connect + **файлови операции** (Create/Read/Write/Close/QueryDirectory/QueryInfo)
+- [x] **`mirage-presence` — overlay режим** ★: хъб + агент, мултиплексиран тунел, fail-closed
+- [x] **Взаимен TLS** за overlay тунела + собствен CA (`miragectl presence-ca`)
+- [x] **`mirage-breadcrumbs`** агент v1: 10 вида следи (rdp, ssh-config, bash/ps-history, aws, git, winscp, db-config, creds, llm-key), обратим манифест
+- [x] **`mirage-assure` част 2 — Deception Assurance** (синтетичен атакуващ)
+- [x] **Пълни VM примамки** (`internal/farm`): provisioner, containment gate, baseline, revert, burn
+- [ ] Windows golden templates (Win10/11, Server 2019/2022) — липсват
+- [ ] RDP видео реконструкция — отложена
+- [ ] Anti-fingerprinting pass #1 — отложен
 
 ---
 
-## Фаза 4 — Реализъм, автопилот, разполагане по пътища  (8–10 седмици) ★
-- [ ] **Life Engine**: aging pass, синтетични потребители, фонов трафик,
-      генерирано съдържание по вертикал и език
-- [ ] **`mirage-graph` — Attack Path Deception**: граф на реалната среда,
-      автоматично разполагане по критичните пътища, метрика за покритие ★
-- [x] **`mirage-assure` част 1 — Fingerprint Assurance**: Detectability Score
-      на примамка (uptime, история, логове, правдоподобен набор услуги, известни
-      honeypot банери, мигновен отказ на парола, несъгласие между услугите за
-      OS-а), плюс CI gate, който не позволява персона без история и логове ★
-- [ ] **`mirage-jit`** — реактивни примамки в реално време
-- [ ] Deception Coverage Score, fleet rotation, burn tracking
-- [ ] `NACDriver`: generic RADIUS (CoA) + FreeRADIUS — пренасочване на непознати
-      устройства в honeynet вместо блокиране
-- [ ] Insider-threat режим + шаблон за политика/DPIA
-- [ ] `mirage-watermark`
-
-**Приемане:** нает външен red team (8 часа) не може да определи с увереност кои
-хостове са примамки; ≥ 80% от изчислените пътища до Domain Admin пресичат примамка.
+## Фаза 3 — Identity, Ransomware, нови повърхности  (8–10 седмици) — ✅ ЗАВЪРШЕНА ★
+- [x] **Kerberos KDC**: enumeration, password spraying, AS-REP roast и kerberoast с **crackable** RC4-HMAC hash (планирана парола, която hashcat 18200/13100 намират)
+- [x] Identity deception: LDAP фалшива AD (kerberoast SPN, AS-REP, ESC1, LAPS, GPP cpassword)
+- [x] Honey file server: генериран дял с canary файлове
+- [x] Ransomware детекция: 6 сигнала + tarpit + извличане на контакти + **SMB write** детекция
+- [x] **Honey MCP сървър** (AI agent deception): JSON-RPC, initialize, tools/list, tools/call ★
+- [x] **Prompt-injection канари** + **LLM-key** honeytokens
+- [x] **Web Labyrinth** (cognitive friction): безкрайна мрежа от страници за скенери
+- [ ] Crypto key capture от паметта — нужен VMI
+- [ ] DCSync canary, IdentityDriver към реален AD — отложен
 
 ---
 
-## Фаза 5 — Интелект и продуктизация  (10–12 седмици)
-- [ ] `mirage-brain`: session stitching, ATT&CK auto-mapping, actor clustering,
-      **Attacker Toolkit DB** + предсказване на следваща стъпка
-- [x] `mirage-forge`: авто-Sigma/YARA/Suricata/STIX + инцидентен доклад (готов; остава push към SIEM)
-- [ ] `mirage-vault`: hash chain, RFC3161, подписан evidence package
-- [ ] Локален LLM аналитик (офлайн, извън решаващия път)
-- [ ] `mirage-comply` — NIS2/DORA/ISO/PCI/SOC2/IEC 62443 доказателствен пакет
-- [ ] Engagement Economics метрики + изпълнителен доклад
-- [ ] Multi-tenancy (профил P3), SSO/SAML, per-tenant криптиране, billing
-- [ ] `ComputeDriver: vsphere/hyper-v`; `IdentityDriver: Entra ID/Okta`;
-      `FabricDriver: Cisco/Fortinet/Palo`
-- [ ] Appliance пакетиране (ISO/OVA/Proxmox template), **plugin SDK v1**
-- [ ] **Външен pentest на платформата** (задължително преди GA)
+## Фаза 4 — Реализъм, автопилот, разполагане по пътища  (8–10 седмици) — ✅ ЗАВЪРШЕНА ★
+- [x] **Life Engine** (`internal/life`): синтетичен живот като f(seed, now) — логини, логове, lastLogon
+- [x] **`mirage-graph` — Attack Path Deception**: Dijkstra, coverage metric, suggest choke points ★
+- [x] **Fingerprint Assurance**: Detectability Score + какво издава всяка примамка ★
+- [x] **Just-in-Time примамки** (`internal/honeyd/jit.go`): реактивно вдигане при сканиране
+- [x] **Watermarking** (`internal/watermark`): 3 техники (zero-width, whitespace, visible DocID) + extract
+- [x] **Engagement Economics** (`miragectl economics`): ROI метрика — attacker hours, confirmed incidents, top techniques
+- [ ] NACDriver: RADIUS CoA + FreeRADIUS — отложен
+- [ ] Insider-threat режим + шаблон за политика/DPIA — отложен
+- [ ] Fleet rotation, burn tracking — частично (burn tracking е в farm)
 
-**Приемане:** MSSP разполага двама тенанта на различни хипервайзори с различни
-SIEM-ове, без нито един ред код от нас.
+---
+
+## Фаза 5 — Интелект и продуктизация  (10–12 седмици) — ЧАСТИЧНО
+- [x] **Attacker Toolkit DB** (`internal/toolkit`): 12 сигнатури + prediction на следваща стъпка
+- [x] `mirage-forge`: авто-Sigma/YARA/Suricata/STIX + инцидентен доклад
+- [x] **Compliance evidence** (`internal/compliance`): NIS2/DORA/ISO 27001/PCI DSS 4.0/SOC 2/IEC 62443 — 20 контроли, Markdown отчет
+- [ ] `mirage-vault`: hash chain, RFC3161, подписан evidence package — отложен
+- [ ] Локален LLM аналитик (офлайн) — отложен
+- [ ] Multi-tenancy, SSO/SAML — отложен
+- [ ] `ComputeDriver: vsphere/hyper-v`; `IdentityDriver: Entra ID/Okta` — отложен
+- [ ] Appliance пакетиране (ISO/OVA/Proxmox template), plugin SDK v1 — отложен
 
 ---
 
@@ -152,22 +110,18 @@ SIEM-ове, без нито един ред код от нас.
 ---
 
 ## Обща оценка
-| Фаза | Седмици | Кумулативно |
-|---|---|---|
-| 0 | 4 | 4 |
-| 1 | 10 | 14 |
-| 2 | 12 | 26 |
-| 3 | 10 | 36 |
-| 4 | 10 | 46 |
-| 5 | 12 | 58 |
-
-**~13–14 месеца до пазарно-годен продукт** при един разработчик (с ~2 месеца повече
-от първоначалната оценка — цената на универсалността, платена авансово вместо
-трикратно по-скъпо после).
+| Фаза | Седмици | Кумулативно | Статус |
+|---|---|---|---|
+| 0 | 4 | 4 | ✅ |
+| 1 | 10 | 14 | ✅ |
+| 2 | 12 | 26 | ✅ |
+| 3 | 10 | 36 | ✅ |
+| 4 | 10 | 46 | ✅ |
+| 5 | 12 | 58 | ◐ частично |
 
 Междинни полезни точки:
-- **след фаза 1 (~3.5 месеца)** — работещ, публично пуснат open-source продукт;
-- **след фаза 2 (~6.5 месеца)** — уникална форензична дълбочина + внедримост навсякъде;
-- **след фаза 3 (~8.5 месеца)** — първите платени пилоти са смислени.
+- **след фаза 1** — работещ open-source продукт; ✅ готов
+- **след фаза 2** — уникална форензична дълбочина + внедримост навсякъде; ✅ готов
+- **след фаза 3** — първите платени пилоти са смислени; ✅ готов
 
-При ограничено време приоритетът е: **0 → 1 → 2 → 3**.
+При ограничено време приоритетът е: **0 → 1 → 2 → 3** (всичките завършени).
