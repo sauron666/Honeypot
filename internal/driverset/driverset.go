@@ -24,6 +24,8 @@ func Default() *drivers.Registry {
 	r.Register(sink.FileInfo(), sink.NewFile)
 	r.Register(sink.WebhookInfo(), sink.NewWebhook)
 	r.Register(sink.SyslogInfo(), sink.NewSyslog)
+	r.Register(sink.ElasticInfo(), sink.NewElastic)
+	r.Register(sink.SplunkInfo(), sink.NewSplunk)
 
 	return r
 }
