@@ -53,6 +53,9 @@
 | 8 Attacker Toolkit DB + предсказване | ✗ | — |
 | 9 Deception за AI агенти / MCP ★ | ◐ prompt-canary + LLM-key tokens + labyrinth | `internal/tokens/canary.go`, breadcrumbs |
 | 10 Supply-chain / DevOps deception | частично: Breadcrumbs покрива CI/endpoint следи | `internal/breadcrumbs` |
+| — SMB файлови операции (ransomware по SMB) | ✅ готово | `internal/honeyd/smb_files.go` |
+| — Proxmox compute driver | ✅ готово | `internal/drivers/compute/proxmox.go` |
+| 6 Just-in-Time примамки (реактивно вдигане) | ✅ готово | `internal/honeyd/jit.go` |
 | 15 Cognitive Friction (web labyrinth) | ✅ web labyrinth (infinite scanner trap) | `internal/honeyd/svc_http.go` |
 | 17 Engagement Economics | ✅ готово | `internal/engagement`, `miragectl economics` |
 | 11–20 (останалите) | ✗ по-нататъшни фази | — |

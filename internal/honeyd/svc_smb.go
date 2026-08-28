@@ -96,6 +96,7 @@ type smbHeader struct {
 
 func (s *smbSvc) Serve(ctx context.Context, conn net.Conn, sess *Session) error {
 	r := bufio.NewReader(conn)
+	files := newSMBFileState()
 
 	var (
 		challenge [8]byte
@@ -150,25 +151,32 @@ func (s *smbSvc) Serve(ctx context.Context, conn net.Conn, sess *Session) error 
 			resp = s.treeConnect(hdr, body, sess)
 
 		case smb2Create:
-			// An authenticated account without share permissions is the most
-			// ordinary outcome on any real network.
-			name := readCreateName(body)
-			sev := event.SeverityMedium
-			e := sess.Event(event.ClassSMBActivity, 1, sev).
-				WithMessage("SMB open attempt: %s", name).
-				WithAttack(event.Technique{Tactic: "TA0007", Technique: "T1135", Name: "Network Share Discovery"})
-			e.Set("path", name)
-			sess.Emit(e)
-			resp = errorResponse(hdr, statusAccessDenied)
+			if s.p.FS != nil {
+				resp = s.smbCreate(hdr, body, files, sess)
+			} else {
+				resp = errorResponse(hdr, statusAccessDenied)
+			}
+
+		case smb2Read:
+			resp = s.smbRead(hdr, body, files, sess)
+
+		case smb2Write:
+			resp = s.smbWrite(hdr, body, files, sess)
+
+		case smb2Close:
+			resp = s.smbClose(hdr, body, files)
+
+		case smb2QueryDirectory:
+			resp = s.smbQueryDirectory(hdr, body, files, sess)
+
+		case smb2QueryInfo:
+			resp = s.smbQueryInfo(hdr, body, files)
 
 		case smb2TreeDisconnect:
 			resp = simpleResponse(hdr, statusSuccess, []byte{0x04, 0x00, 0x00, 0x00})
 
 		case smb2Logoff:
 			resp = simpleResponse(hdr, statusSuccess, []byte{0x04, 0x00, 0x00, 0x00})
-
-		case smb2Close, smb2Read, smb2Write, smb2QueryDirectory, smb2QueryInfo:
-			resp = errorResponse(hdr, statusAccessDenied)
 
 		default:
 			resp = errorResponse(hdr, statusNotSupported)
@@ -587,8 +595,4 @@ func fromUTF16LE(b []byte) string {
 	return string(utf16.Decode(units))
 }
 
-// windowsTime converts to 100-nanosecond intervals since 1601.
-func windowsTime(t time.Time) uint64 {
-	const epochDiff = 11644473600
-	return uint64((t.Unix() + epochDiff) * 10000000)
-}
+// windowsTime is defined in smb_files.go.

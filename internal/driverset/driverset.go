@@ -20,6 +20,7 @@ func Default() *drivers.Registry {
 	r.Register(compute.InprocInfo(), compute.NewInproc)
 	r.Register(compute.PodmanInfo(), compute.NewPodman)
 	r.Register(compute.LibvirtInfo(), compute.NewLibvirt)
+	r.Register(compute.ProxmoxInfo(), compute.NewProxmox)
 
 	// Fabric: two drivers that answer different questions. nftables reads and
 	// writes the intent; probe tests what a packet actually reaches. A
