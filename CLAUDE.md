@@ -49,7 +49,8 @@ make build
 | `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
 | `internal/api` | REST + вградена конзола (`internal/api/web/`) |
-| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence` | бинарите |
+| `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
+| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите |
 
 ### Протоколи (`internal/honeyd/svc_*.go`)
 
@@ -143,6 +144,11 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
 - **Един каталог, два изгледа.** LDAP и Kerberos четат от `buildHoneyDirectory`;
   ако svc_sql се вижда по LDAP, но не се roast-ва по Kerberos, атакуващият е
   намерил шева. `TestKerberosBaitAgreesWithWhatLDAPAdvertises` го пази.
+- **Breadcrumbs пише на чужда машина — затова не разрушава.** Никога не
+  презаписва съществуващ файл (O_EXCL за нови, fenced append за съществуващи);
+  всеки crumb носи регистриран honeytoken (не истинска тайна); манифест пази
+  какво е поставено, за да се махне точно то. `Remove` възстановява реалния
+  файл байт-за-байт. Тестовете го доказват (append+remove round-trip, rollback).
 - **Синтетичният живот е чиста функция на времето, не горутина.** `internal/life`
   не мутира нищо и не пази състояние: `Logins(now)` изчислява графика от seed-а.
   Затова няма race с четенето от атакуващия, историята е стабилна между две
@@ -181,9 +187,9 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
    Липсва packer/cloud-init рецепта и `proxmox` драйвер.
 2. **Life Engine** — синтетични потребители, които поддържат примамката жива
    (логове, lastLogon, нови файлове) докато атакуващият я гледа.
-4. **VMI observer** (DRAKVUF/libvmi) — най-тежкото, изисква хипервайзор.
-5. **Breadcrumbs агент** — подхвърля примамки на реални endpoint-и.
-6. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
+4. **VMI observer** (DRAKVUF/libvmi) — най-тежкото, изисква хипервайзор. Виж
+   `docs/adr/ADR-010-vmi-observer.md` за плана и какво остава като hypervisor-glue.
+5. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
 
 Отхвърлени съзнателно (виж `docs/11-IDEAS.md`): hack-back, автоматично
 блокиране на IP към прод firewall, cloud-only контролер.

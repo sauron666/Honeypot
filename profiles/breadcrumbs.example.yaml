@@ -1,0 +1,36 @@
+# mirage-breadcrumbs — seed a real endpoint with lures leading into the decoys
+#
+# This runs on a machine an attacker might land on (a workstation, a jump box,
+# a build agent), NOT where the decoys live. It mints honeytokens from the
+# director so the director's watcher knows them, then plants lures that point at
+# decoys: a saved .rdp file, an ~/.aws profile, a line of shell history.
+#
+#   mirage-breadcrumbs plan   --config breadcrumbs.example.yaml   # shows, changes nothing
+#   mirage-breadcrumbs apply  --config breadcrumbs.example.yaml   # mints + places, writes a manifest
+#   mirage-breadcrumbs remove --manifest breadcrumbs-manifest.json
+#
+# It writes to a machine MIRAGE does not own, so it never overwrites a real file
+# (it creates new ones or appends a fenced, reversible block) and never plants a
+# real secret — every credential is a canary that unlocks only a decoy.
+
+# Where to mint tokens. This is the director's management API; the endpoint must
+# be able to reach it (once, at apply time — the lures themselves point at
+# decoys, never back here).
+director: http://mirage.example:8422
+# token: set-me-if-the-api-requires-one
+
+target:
+  # os and home default to this host's; set them to seed a profile other than
+  # the account running the command.
+  os: linux            # or windows
+  home: /home/alice
+  user: alice
+
+# The decoys to lead an attacker to. host is what they will type or click;
+# service decides which lures make sense (rdp -> .rdp file, ssh -> ssh config,
+# mysql/mssql -> db config + history, http -> aws/git/creds files).
+decoys:
+  - {id: dcy-dc01,    host: dc01.corp.local,    service: rdp,   user: administrator}
+  - {id: dcy-fs01,    host: fs01.corp.local,    service: ssh,   user: svc_backup}
+  - {id: dcy-sql01,   host: sql01.corp.local,   service: mssql, user: sa}
+  - {id: dcy-portal,  host: portal.corp.local,  service: http,  user: admin}
