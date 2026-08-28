@@ -178,6 +178,8 @@ func suggestedServices(persona string) string {
 		return "ssh, mysql, mssql, redis"
 	case "linux/backup":
 		return "ssh, ftp, telnet"
+	case "linux/fileserver":
+		return "ftp, ssh (ransomware engine watches the share)"
 	default:
 		return "ssh"
 	}

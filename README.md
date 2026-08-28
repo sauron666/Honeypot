@@ -96,9 +96,10 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 | `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424) |
 | `internal/honeyd` | 12 протокола: **ssh** (истински), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **generic** |
-| `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup` с виртуална ФС и подхвърлени тайни |
+| `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран файлов дял с canary файлове) |
 | `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
 | `internal/forge` | **автогенериране на Sigma / Suricata / YARA / STIX + инцидентен доклад** |
+| `internal/ransomware` | **шест независими сигнала за криптор + tarpit + извличане на контактите от бележката** |
 | `internal/engagement` | стичване на събития в една история + risk score; възстановяване от evidence файл |
 | `internal/alert` | праг по severity, дедупликация, линк към engagement |
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
@@ -110,8 +111,8 @@ mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърленат
 ## Какво НЕ работи още
 
 Няма VMI observer, няма пълни VM примамки, няма SMB, няма identity/AD deception,
-няма ransomware engine, няма Life Engine (синтетични потребители), няма overlay
-режим. Пътната карта и редът на изпълнение: `docs/07-ROADMAP.md`.
+няма Life Engine (синтетични потребители), няма overlay режим. Ransomware
+двигателят работи през FTP; при SMB ще хваща и Windows криптори. Пътната карта и редът на изпълнение: `docs/07-ROADMAP.md`.
 
 ## Статус
 

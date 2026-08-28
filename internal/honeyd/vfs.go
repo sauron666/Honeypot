@@ -25,6 +25,11 @@ type VNode struct {
 	// Honeytoken marks content that is deliberately baited. Reading it is a
 	// high-severity event even though the read itself looks mundane.
 	Honeytoken string
+
+	// Canary marks a file that exists only to be touched by something sweeping
+	// the share. Names are chosen to sort first, because almost every encryptor
+	// walks a directory in order.
+	Canary bool
 }
 
 // VFS is a decoy's filesystem.
@@ -73,6 +78,13 @@ func (v *VFS) AddFile(p, content, owner, group, mode string, mtime time.Time) *V
 		n.Mode = "-rw-r--r--"
 	}
 	parent.Children[name] = n
+	return n
+}
+
+// AddCanary places a bait file whose only purpose is to be touched.
+func (v *VFS) AddCanary(p, content, owner, group, mode string, mtime time.Time) *VNode {
+	n := v.AddFile(p, content, owner, group, mode, mtime)
+	n.Canary = true
 	return n
 }
 

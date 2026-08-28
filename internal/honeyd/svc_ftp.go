@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/ransomware"
 )
 
 func init() { RegisterService("ftp", newFTP) }
@@ -23,6 +24,10 @@ func init() { RegisterService("ftp", newFTP) }
 type ftpSvc struct {
 	p      *Persona
 	banner string
+	// tarpitMax bounds how long a single operation may be delayed once the
+	// detector is confident. Operators tune it: longer buys more time for
+	// responders, shorter keeps the decoy feeling ordinary for longer.
+	tarpitMax time.Duration
 	// pasvHost is the address advertised in PASV replies. Empty means "the
 	// address the control connection arrived on", which is right in most
 	// topologies and avoids leaking an internal address.
@@ -30,7 +35,10 @@ type ftpSvc struct {
 }
 
 func newFTP(p *Persona, opts map[string]any) (Service, error) {
-	f := &ftpSvc{p: p, banner: p.FTPBanner}
+	f := &ftpSvc{p: p, banner: p.FTPBanner, tarpitMax: 8 * time.Second}
+	if v, ok := opts["tarpit_max_ms"].(int); ok && v >= 0 {
+		f.tarpitMax = time.Duration(v) * time.Millisecond
+	}
 	if v, ok := opts["banner"].(string); ok && v != "" {
 		f.banner = v
 	}
@@ -43,17 +51,21 @@ func newFTP(p *Persona, opts map[string]any) (Service, error) {
 func (f *ftpSvc) Type() string { return "ftp" }
 
 type ftpState struct {
-	user      string
-	authed    bool
-	cwd       string
-	attempt   int
-	dataList  net.Listener
-	transfers int
+	user       string
+	authed     bool
+	cwd        string
+	attempt    int
+	dataList   net.Listener
+	transfers  int
+	renameFrom string
+	// detect watches this session's file operations. A decoy share has no
+	// legitimate writer, so an encryptor stands out immediately.
+	detect *ransomware.Detector
 }
 
 func (f *ftpSvc) Serve(ctx context.Context, conn net.Conn, s *Session) error {
 	r := bufio.NewReader(conn)
-	st := &ftpState{cwd: "/"}
+	st := &ftpState{cwd: "/", detect: ransomware.New(ransomware.Options{TarpitMax: f.tarpitMax})}
 	defer func() {
 		if st.dataList != nil {
 			st.dataList.Close()
@@ -137,7 +149,7 @@ func (f *ftpSvc) dispatch(ctx context.Context, conn net.Conn, st *ftpState, cmd,
 		return false, reply("215 UNIX Type: L8")
 
 	case "FEAT":
-		return false, reply("211-Features:\r\n PASV\r\n SIZE\r\n MDTM\r\n UTF8\r\n211 End")
+		return false, reply("211-Features:\r\n PASV\r\n SIZE\r\n MDTM\r\n REST STREAM\r\n UTF8\r\n211 End")
 
 	case "TYPE":
 		return false, reply("200 Switching to %s mode.", map[string]string{"I": "Binary", "A": "ASCII"}[arg])
@@ -154,6 +166,28 @@ func (f *ftpSvc) dispatch(ctx context.Context, conn net.Conn, st *ftpState, cmd,
 	}
 
 	switch cmd {
+	case "RNFR":
+		st.renameFrom = Resolve(st.cwd, arg)
+		if _, ok := f.p.FS.Lookup(st.renameFrom); !ok {
+			st.renameFrom = ""
+			return false, reply("550 RNFR command failed.")
+		}
+		return false, reply("350 Ready for RNTO.")
+
+	case "RNTO":
+		if st.renameFrom == "" {
+			return false, reply("503 RNFR required first.")
+		}
+		to := Resolve(st.cwd, arg)
+		from := st.renameFrom
+		st.renameFrom = ""
+		f.observe(st, s, ransomware.Op{Kind: ransomware.OpRename, Path: from, NewPath: to})
+		e := s.Event(event.ClassFileActivity, 3, event.SeverityMedium).
+			WithMessage("FTP rename: %s -> %s", from, to)
+		e.Set("file_path", from).Set("new_path", to)
+		s.Emit(e)
+		return false, reply("250 Rename successful.")
+
 	case "PWD", "XPWD":
 		return false, reply("257 \"%s\" is the current directory", st.cwd)
 
@@ -216,6 +250,7 @@ func (f *ftpSvc) dispatch(ctx context.Context, conn net.Conn, st *ftpState, cmd,
 		}
 		s.Emit(e)
 		st.transfers++
+		f.observe(st, s, ransomware.Op{Kind: ransomware.OpRead, Path: path, Canary: n.Canary})
 		return false, f.sendData(ctx, st, s, reply, func() string { return n.Content },
 			fmt.Sprintf("Opening BINARY mode data connection for %s (%d bytes).", arg, n.Size))
 
@@ -226,6 +261,12 @@ func (f *ftpSvc) dispatch(ctx context.Context, conn net.Conn, st *ftpState, cmd,
 		return false, f.receiveData(ctx, st, s, reply, Resolve(st.cwd, arg))
 
 	case "DELE", "RMD":
+		target := Resolve(st.cwd, arg)
+		canary := false
+		if n, ok := f.p.FS.Lookup(target); ok {
+			canary = n.Canary
+		}
+		f.observe(st, s, ransomware.Op{Kind: ransomware.OpDelete, Path: target, Canary: canary})
 		e := s.Event(event.ClassFileActivity, 4, event.SeverityHigh).
 			WithMessage("FTP delete: %s", Resolve(st.cwd, arg)).
 			WithAttack(event.Technique{Tactic: "TA0040", Technique: "T1485", Name: "Data Destruction"})
@@ -322,6 +363,22 @@ func (f *ftpSvc) receiveData(ctx context.Context, st *ftpState, s *Session,
 		}
 	}
 
+	// An upload onto an existing document is not an upload, it is a rewrite --
+	// which is what an encryptor does.
+	priorKind, canary := "", false
+	if n, ok := f.p.FS.Lookup(path); ok {
+		priorKind = ransomware.SniffKind([]byte(n.Content))
+		canary = n.Canary
+	}
+	sample := buf
+	if len(sample) > 8192 {
+		sample = sample[:8192]
+	}
+	f.observe(st, s, ransomware.Op{
+		Kind: ransomware.OpWrite, Path: path, Content: sample,
+		Size: int64(len(buf)), PriorKind: priorKind, Canary: canary,
+	})
+
 	e := s.Event(event.ClassFileActivity, 1, event.SeverityCritical).
 		WithMessage("FTP upload captured: %s (%d bytes)", path, len(buf)).
 		WithAttack(event.Technique{Tactic: "TA0011", Technique: "T1105", Name: "Ingress Tool Transfer"})
@@ -335,6 +392,44 @@ func (f *ftpSvc) receiveData(ctx context.Context, st *ftpState, s *Session,
 		Set("sha256", hex.EncodeToString(sum[:]))
 	s.Emit(e)
 	return reply("226 Transfer complete.")
+}
+
+// observe feeds one file operation to the ransomware detector, emits whatever
+// it finds, and applies the tarpit.
+//
+// The tarpit is the only defensive action a decoy can safely take: the files
+// are worthless, so every second it costs the encryptor is a second the
+// responders get for free, and there is nothing real to break.
+func (f *ftpSvc) observe(st *ftpState, s *Session, op ransomware.Op) {
+	if st.detect == nil {
+		return
+	}
+	for _, finding := range st.detect.Observe(op) {
+		sev := event.SeverityHigh
+		techniques := []event.Technique{
+			{Tactic: "TA0040", Technique: "T1486", Name: "Data Encrypted for Impact"},
+		}
+		if finding.Kind == ransomware.SignalConfirmed {
+			sev = event.SeverityCritical
+			techniques = append(techniques,
+				event.Technique{Tactic: "TA0040", Technique: "T1490", Name: "Inhibit System Recovery"})
+		}
+		e := s.Event(event.ClassDetectionFinding, 1, sev).
+			WithMessage("ransomware signal (%s): %s", finding.Kind, finding.Message).
+			WithAttack(techniques...)
+		e.Set("ransomware_signal", string(finding.Kind)).
+			Set("ransomware_score", st.detect.Verdict().Score)
+		if finding.Path != "" {
+			e.Set("file_path", finding.Path)
+		}
+		for k, v := range finding.Evidence {
+			e.Set(k, v)
+		}
+		s.Emit(e)
+	}
+	if d := st.detect.Tarpit(); d > 0 {
+		time.Sleep(d)
+	}
 }
 
 func (f *ftpSvc) homeOf(user string) string {

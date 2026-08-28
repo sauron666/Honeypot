@@ -71,6 +71,18 @@ honeyd:
         - service: snmp     # UDP; answers are bounded so a decoy never amplifies
           port: 1161
 
+    # The decoy a ransomware operator is looking for: a file share full of the
+    # documents that make a company pay. The share is generated, so thousands
+    # of believable files cost a few megabytes of memory. Canary files sort
+    # first in every directory, and the ransomware engine watches every write.
+    - id: dcy-fs01
+      persona: linux/fileserver
+      services:
+        - service: ftp
+          port: 2123
+        - service: ssh
+          port: 2225
+
     # An industrial decoy. A PLC cannot run an agent, which makes a passive
     # decoy the only detection some plants can have at all.
     - id: dcy-plc01

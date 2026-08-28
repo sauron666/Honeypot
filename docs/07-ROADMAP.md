@@ -79,9 +79,10 @@
 ## Фаза 3 — Identity, Ransomware, нови повърхности  (8–10 седмици) ★
 - [ ] `IdentityDriver: AD + ADCS` — honey forest автоматизация, kerberoast/AS-REP/
       DCSync/ESC1 капани, honey GPO/SYSVOL/LAPS
-- [ ] Honey file server: FUSE генерирана FS (безкрайна дълбочина, реални magic bytes)
-- [ ] Ransomware детекция (SMB ентропия/скорост + VMI crypto hooks)
-- [ ] **Crypto key capture** от паметта + tarpit + auto snapshot/IOC push/revert
+- [x] Honey file server: генериран дял (хиляди файлове, реални magic bytes, canary файлове във всяка директория)
+- [~] Ransomware детекция: шест независими сигнала + tarpit + извличане на контакти от бележката; работи през FTP, остава SMB и VMI crypto hooks
+- [x] Tarpit (расте със съмнението, не пипа нормалната работа)
+- [ ] **Crypto key capture** от паметта + auto snapshot/IOC push/revert (изисква VMI)
 - [ ] **`mirage-supply`** — dependency-confusion канари, honey CI runner, honey repo,
       honey K8s namespace/secret
 - [ ] **`mirage-ai`** — honey MCP сървър, prompt-injection канари, honey LLM ключове ★
