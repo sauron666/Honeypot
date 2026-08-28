@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/sauron666/Honeypot/internal/life"
 )
 
 // Persona is the identity a decoy wears: hostname, OS, banners, users, content
@@ -52,6 +54,12 @@ type Persona struct {
 	// so nothing MIRAGE plants can be signatured across customers.
 	Seed string
 
+	// Life renders the decoy's synthetic activity -- logins, logs, last-logon
+	// times -- as a function of the current moment, so a decoy looks lived-in
+	// and, crucially, looks more lived-in every time an attacker checks. It
+	// emits nothing: synthetic activity can never enter the evidence chain.
+	Life *life.Engine
+
 	rnd *rand.Rand
 }
 
@@ -87,7 +95,45 @@ func BuildPersona(name, deploySeed string) (*Persona, error) {
 	if !ok {
 		return nil, fmt.Errorf("honeyd: unknown persona %q (have: %s)", name, strings.Join(PersonaNames(), ", "))
 	}
-	return b(deploySeed), nil
+	p := b(deploySeed)
+	if p.Seed == "" {
+		p.Seed = deploySeed
+	}
+	p.Life = buildLife(p)
+	return p, nil
+}
+
+// buildLife derives the synthetic-activity engine from a persona's own users,
+// so the accounts that log in are the accounts the decoy claims to have. A user
+// whose shell cannot log in (nologin, false) is left out; one that looks like a
+// service or backup account logs in the way those do -- often, briefly, from a
+// fixed host.
+func buildLife(p *Persona) *life.Engine {
+	var actors []life.Actor
+	for _, u := range p.Users {
+		if strings.Contains(u.Shell, "nologin") || strings.Contains(u.Shell, "false") {
+			continue
+		}
+		name := strings.ToLower(u.Name)
+		service := strings.Contains(name, "svc") || strings.Contains(name, "backup") ||
+			strings.Contains(name, "monitor") || strings.Contains(name, "agent")
+		actors = append(actors, life.Actor{User: u.Name, Home: u.Home, Service: service})
+	}
+	// A stable office subnet per deployment, so synthetic logins come from a
+	// plausible internal range rather than from nowhere.
+	octet := 20 + int(seedByte(p.Seed, "life-subnet"))%40
+	return life.New(life.Options{
+		Seed: p.Seed, Host: p.Hostname, Domain: p.Domain,
+		Windows: isWindowsPersona(p.Name),
+		Subnet:  fmt.Sprintf("10.%d.%d", octet, 10+int(seedByte(p.Seed, "life-subnet2"))%40),
+		Actors:  actors,
+	})
+}
+
+// seedByte derives one stable byte from the deployment seed and a label.
+func seedByte(seed, label string) byte {
+	sum := sha256.Sum256([]byte(seed + "|" + label))
+	return sum[0]
 }
 
 // PersonaNames lists the registered personas.

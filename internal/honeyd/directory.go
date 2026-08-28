@@ -225,7 +225,7 @@ func buildHoneyDirectory(p *Persona) *Directory {
 			"department":         {u.dept},
 			"mail":               {u.sam + "@" + domain},
 			"userAccountControl": {"512"}, // NORMAL_ACCOUNT
-			"lastLogonTimestamp": {windowsFileTime(time.Now().Add(-time.Duration(p.rnd.Intn(72)) * time.Hour))},
+			"lastLogonTimestamp": {lastLogonFor(p, u.sam)},
 			"pwdLastSet":         {windowsFileTime(time.Now().Add(-time.Duration(p.rnd.Intn(200)) * 24 * time.Hour))},
 			"distinguishedName":  {dn},
 		})
@@ -399,4 +399,18 @@ func plantedPassword(p *Persona, account string) string {
 func stableByte(s string, i int) byte {
 	sum := sha256.Sum256([]byte("mirage-krb|" + s))
 	return sum[i%len(sum)]
+}
+
+// lastLogonFor renders an account's lastLogonTimestamp from the synthetic-life
+// engine, so it advances over time exactly as the account's logins do. An
+// attacker who reads it, waits and reads again sees it move, which a frozen
+// timestamp copied from boot never would. Accounts the engine has no history
+// for fall back to a plausible recent time.
+func lastLogonFor(p *Persona, sam string) string {
+	if p.Life != nil {
+		if t := p.Life.LastLogon(sam, time.Now()); !t.IsZero() {
+			return windowsFileTime(t)
+		}
+	}
+	return windowsFileTime(time.Now().Add(-time.Duration(p.rnd.Intn(72)) * time.Hour))
 }

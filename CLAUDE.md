@@ -45,6 +45,7 @@ make build
 | `internal/config` | YAML манифест, валидация, `plan` диф, immutable настройки |
 | `internal/app` | сглобяването на едно място (бинарът и e2e тестовете ползват него) |
 | `internal/presence` | overlay: хъб + Presence Agent, тунел с мултиплексиране, взаимен TLS + собствен CA (`ca.go`) |
+| `internal/life` | синтетичен живот: детерминистичен график на логини/логове/lastLogon като функция на времето; примамката изглежда все по-обитаема при всяка проверка |
 | `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
 | `internal/api` | REST + вградена конзола (`internal/api/web/`) |
@@ -142,6 +143,13 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
 - **Един каталог, два изгледа.** LDAP и Kerberos четат от `buildHoneyDirectory`;
   ако svc_sql се вижда по LDAP, но не се roast-ва по Kerberos, атакуващият е
   намерил шева. `TestKerberosBaitAgreesWithWhatLDAPAdvertises` го пази.
+- **Синтетичният живот е чиста функция на времето, не горутина.** `internal/life`
+  не мутира нищо и не пази състояние: `Logins(now)` изчислява графика от seed-а.
+  Затова няма race с четенето от атакуващия, историята е стабилна между две
+  четения и напредва само когато `now` мине следващото събитие. Метроном
+  (нов ред всеки N секунди) е по-силен tell от липсата на живот — затова всичко
+  е jitter-нато от seed-а. И най-важното: **не емитира събития**, за да не влезе
+  синтетична активност в доказателствената верига като атакуващ.
 - **TLS ръкостискането се прави явно в `serveAgent`.** Оставено на първия
   `Read`, проблем със сертификат излиза като „връзката не започна с hello",
   което праща човека, който вдига mTLS, точно в грешната посока.
@@ -173,11 +181,9 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
    Липсва packer/cloud-init рецепта и `proxmox` драйвер.
 2. **Life Engine** — синтетични потребители, които поддържат примамката жива
    (логове, lastLogon, нови файлове) докато атакуващият я гледа.
-4. **SMB файлови операции** — за да работи ransomware двигателят и срещу
-   Windows криптори. Изисква валидация срещу истински Windows клиент.
-5. **VMI observer** (DRAKVUF/libvmi) — най-тежкото, изисква хипервайзор.
-6. **Breadcrumbs агент** — подхвърля примамки на реални endpoint-и.
-7. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
+4. **VMI observer** (DRAKVUF/libvmi) — най-тежкото, изисква хипервайзор.
+5. **Breadcrumbs агент** — подхвърля примамки на реални endpoint-и.
+6. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
 
 Отхвърлени съзнателно (виж `docs/11-IDEAS.md`): hack-back, автоматично
 блокиране на IP към прод firewall, cloud-only контролер.

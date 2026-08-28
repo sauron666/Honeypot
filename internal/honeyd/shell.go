@@ -172,6 +172,11 @@ func (sh *Shell) runOne(line string) (string, bool) {
 		return sh.arp(), false
 	case "w", "who", "users":
 		return sh.who(), false
+	case "last", "lastlog", "lastb":
+		if sh.p.Life != nil {
+			return sh.p.Life.Last(time.Now(), 40), false
+		}
+		return "\nwtmp begins " + sh.p.BootTime.Format("Mon Jan  2 15:04:05 2006") + "\n", false
 	case "env", "printenv", "set":
 		return sh.printEnv(), false
 	case "echo":
@@ -375,9 +380,31 @@ func (sh *Shell) cat(args []string) string {
 			continue
 		}
 		sh.readEvent(abs, n)
-		b.WriteString(n.Content)
+		if live := sh.liveContent(abs); live != "" {
+			// auth.log and friends are rendered fresh from the life engine, so
+			// the newest line is always minutes old rather than frozen at the
+			// moment the decoy booted. The static content stays as a fallback.
+			b.WriteString(live)
+		} else {
+			b.WriteString(n.Content)
+		}
 	}
 	return b.String()
+}
+
+// liveContent renders a log file from the synthetic-life engine when the path
+// is one whose freshness an attacker checks. An empty return means "serve the
+// static content".
+func (sh *Shell) liveContent(abs string) string {
+	if sh.p.Life == nil {
+		return ""
+	}
+	now := time.Now()
+	switch {
+	case strings.HasSuffix(abs, "/auth.log"), strings.HasSuffix(abs, "/secure"):
+		return sh.p.Life.AuthLog(now, 48)
+	}
+	return ""
 }
 
 // readEvent records a file read, escalating when the file was bait.
@@ -513,8 +540,27 @@ func (sh *Shell) arp() string {
 }
 
 func (sh *Shell) who() string {
-	return fmt.Sprintf("%-8s pts/0        %s (%s)\n", sh.user,
+	var b strings.Builder
+	// The attacker's own session, first.
+	fmt.Fprintf(&b, "%-8s pts/0        %s (%s)\n", sh.user,
 		sh.s.Started.Format("2006-01-02 15:04"), sh.s.SrcIP())
+	// Then whoever the life engine says is also on. A host where the only
+	// logged-in user is the person who just broke in is a host that was
+	// abandoned until they arrived -- which is not the busy server the decoy
+	// claims to be. These sessions come from the internal subnet, so they are
+	// visibly not the attacker.
+	if sh.p.Life != nil {
+		n := 1
+		for _, l := range sh.p.Life.ActiveNow(time.Now()) {
+			if l.Service {
+				continue // service logins are brief; they rarely show in `w`
+			}
+			fmt.Fprintf(&b, "%-8s pts/%d        %s (%s)\n", l.User, n,
+				l.Start.Format("2006-01-02 15:04"), l.From)
+			n++
+		}
+	}
+	return b.String()
 }
 
 func (sh *Shell) printEnv() string {
