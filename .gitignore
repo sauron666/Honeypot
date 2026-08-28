@@ -1,0 +1,17 @@
+# Go
+/bin/
+*.exe
+*.test
+# Rust
+/observer/target/
+# Node
+node_modules/
+web/dist/
+# Local
+.env
+*.local.yaml
+# Артефакти — НИКОГА в git
+*.pcap
+*.pcapng
+*.dmp
+evidence/
