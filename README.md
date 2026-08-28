@@ -31,11 +31,28 @@ MIRAGE е платформа за **active defense / deception**: изолира
 | `docs/03-DECEPTION-CATALOG.md` | Каталог на примамки, honeytokens, breadcrumbs, anti-fingerprinting |
 | `docs/04-ISOLATION-SAFETY.md` | Containment модел, kill-switch, правни и етични рамки |
 | `docs/05-DATA-MODEL.md` | Схема на събитията (OCSF), storage, chain of custody |
-| `docs/06-LAB-INTEGRATION.md` | Интеграция с Proxmox / OPNsense / FreeRADIUS / Velociraptor / ADCS / SIEM |
+| `docs/06-DEPLOYMENT-PROFILES.md` | Седем профила на внедряване: SMB, mid-market, enterprise, MSSP, cloud, OT/air-gap, range |
 | `docs/07-ROADMAP.md` | Фази, deliverables, оценки, критерии за приемане |
 | `docs/08-TECH-STACK.md` | Езици, библиотеки, repo layout, build/CI |
 | `docs/09-BUSINESS.md` | Лицензиране, open-core, ценообразуване, пазар |
+| `docs/10-INTEGRATIONS.md` | Драйверни абстракции, матрица на поддръжката, plugin SDK, overlay режим |
+| `docs/11-IDEAS.md` | Разширен каталог идеи с оценка и приоритет |
+
+## Универсалност
+
+MIRAGE не е обвързан с конкретна инфраструктура. Ядрото говори с външния свят само
+през осем драйверни интерфейса (`docs/10-INTEGRATIONS.md`), а начинът на внедряване
+се избира от профил (`docs/06-DEPLOYMENT-PROFILES.md`):
+
+- **Compute:** KVM/libvirt, Proxmox, vSphere, Hyper-V, Nutanix, XCP-ng, AWS/Azure/GCP,
+  Kubernetes, Podman — или изобщо без хипервайзор ("honeypot в кутия").
+- **Мрежа:** inline (реални VLAN-и), **overlay** (WireGuard, без никаква промяна в
+  мрежата) или cloud (SG/NSG).
+- **Идентичност:** AD/ADCS, Entra ID, Okta, Google Workspace, FreeIPA, Keycloak.
+- **Изход:** всеки SIEM/SOAR/EDR/TI през syslog, ECS, OCSF, CEF, STIX.
+
+Целта е **10 минути до първата примамка** в най-простия профил.
 
 ## Статус
 
-**Фаза: планиране.** Няма код все още — този commit е архитектурният план.
+**Фаза: планиране.** Няма код все още — тези commit-и са архитектурният план.

@@ -14,6 +14,9 @@
 | **Community** | AGPL-3.0 | honeyd ферма, tokens, единичен site, основен UI, syslog/webhook export, ръчно разполагане |
 | **Enterprise** | комерсиален (или BSL 1.1 с 4-годишен преход към Apache) | VMI observer, Windows/AD/ADCS deception, ransomware engine + key capture, Life Engine, Mimicry Autopilot, forge (Sigma/YARA), evidence packages, multi-site, MSSP multi-tenancy, SSO/SAML, поддръжка |
 
+Съответствие с профилите на внедряване (`docs/06`): **P0 "honeypot в кутия" е
+Community** и е безплатен завинаги — той е дистрибуционният канал. P1–P5 са Enterprise.
+
 Защо open core: deception продуктите се купуват след доверие. Community изданието
 дава дистрибуция, GitHub звезди, вход в SOC-овете. Enterprise частта е точно това,
 което конкуренцията не може да копира бързо (VMI, ransomware key capture, Life Engine).
@@ -28,7 +31,9 @@
 | Per decoy IP | активна примамка/година | €90–150 (L1/L2), €400–700 (L3/L4 VM) |
 | Per site | Site Controller/година | €4 000 |
 | Per endpoint | breadcrumb агент/година | €6–12 |
-| MSSP | per tenant + обем | договорно |
+| MSSP | per tenant + обем | договорно (overlay режим прави внедряването почти безплатно за тях) |
+| Range/обучение | per seat/година | €150–300 |
+| Deception Packs | безплатни (общностни) / premium вертикални | €0 / €1 500 на вертикал |
 | Support | Standard 8x5 / Premium 24x7 | 18% / 25% от лиценза |
 
 За сравнение: FortiDeceptor стартира около €15–25k/година за средно внедряване;
@@ -70,6 +75,8 @@ Attivo и Acalvio са значително по-скъпи. Наша позиц
 | Ransomware key capture | много висока — уникално продажбено твърдение |
 | Данни от високо-интерактивен honeynet (opt-in feed) | нараства с времето — класически data moat |
 | Open source общност | средна, но създава дистрибуция |
+| Драйверна универсалност | средна — скъпа за догонване от нишов вендор |
+| Общностен каталог персони/пакети | нараства с времето; чужд продукт не може да го вземе |
 
 ## 8. Рискове за бизнеса
 - **Един разработчик = bus factor 1.** Смекчаване: чиста архитектура, документация,

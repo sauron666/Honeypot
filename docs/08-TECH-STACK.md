@@ -38,7 +38,10 @@ mirage/
 │   ├── mirage-brain/
 │   ├── mirage-forge/
 │   ├── mirage-breadcrumbs/     # агент (Win/Lin/Mac)
-│   └── miragectl/              # CLI
+│   ├── mirage-presence/        # Presence Agent (overlay режим)
+│   ├── mirage-graph/           # attack path deception
+│   ├── mirage-assure/          # fingerprint + deception assurance
+│   └── miragectl/              # CLI (plan/apply/destroy)
 ├── internal/
 │   ├── event/                  # OCSF схема, валидация, hash chain
 │   ├── bus/                    # NATS абстракция
@@ -46,11 +49,21 @@ mirage/
 │   ├── engagement/             # stitching, жизнен цикъл
 │   ├── attack/                 # ATT&CK mapping
 │   ├── policy/                 # containment политики (hard-coded предпазители)
-│   ├── provision/              # drivers: proxmox, libvirt, podman
+│   ├── drivers/                # ★ ОСЕМТЕ АБСТРАКЦИИ — единственото място с вендори
+│   │   ├── compute/            # libvirt, proxmox, podman, vsphere, hyperv, cloud
+│   │   ├── fabric/             # nftables, ovs, opnsense, cisco, cloud-sg
+│   │   ├── nac/                # radius, freeradius, ise, clearpass
+│   │   ├── identity/           # ad, adcs, entra, okta, freeipa, keycloak
+│   │   ├── observer/           # vmi, ebpf, netrecon, agent, snapshot
+│   │   ├── forensics/          # velociraptor, wazuh, grr, edr-api
+│   │   ├── sink/               # syslog, elastic, splunk, sentinel, thehive
+│   │   └── intel/              # misp, opencti, stix
 │   ├── protocols/              # емулатори по протокол
 │   ├── recon/                  # реконструктори: ssh, rdp, smb, http
 │   ├── deception/              # tokens, breadcrumbs, personas, content gen
 │   ├── life/                   # Life Engine
+│   ├── dac/                    # Deception-as-Code: plan/apply/drift
+│   ├── persona/                # персони, i18n, генератори на съдържание
 │   ├── ransomware/             # детекция, tarpit, key capture
 │   └── export/                 # siem, stix, sigma, yara
 ├── observer/                   # Rust + C: libvmi/DRAKVUF бридж
@@ -58,6 +71,9 @@ mirage/
 │   └── ffi/
 ├── analytics/                  # Python plugins (sandboxed)
 ├── web/                        # React UI
+├── profiles/                   # профили на внедряване (P0..P7) + референтни карти
+├── packs/                      # общностни Deception Packs (персони, lures)
+├── plugin-sdk/                 # gRPC plugin SDK + примери
 ├── templates/                  # Packer + Ansible за golden images
 │   ├── win11-corp/ winsrv2022-file/ deb12-web/ nas-appliance/
 ├── deploy/
@@ -87,5 +103,8 @@ mirage/
 | DRAKVUF/libvmi е крехък при нови Windows build-ове | абстрахираме зад интерфейс; fallback към eBPF/ETW-от-хоста; поддържаме фиксиран набор образи |
 | Обем от VMI телеметрия | tracing само при активна сесия + adaptive sampling + ClickHouse |
 | Escalation handoff (L1→L3) е нетривиален | прототип още във фаза 1 като spike; ако не стане прозрачно — приемаме "reset" на връзката, което е приемливо за повечето вектори |
-| Anti-fingerprinting е безкрайна битка | превръщаме го в CI gate, не в еднократна задача |
+| Anti-fingerprinting е безкрайна битка | превръщаме го в CI gate (`mirage-assure`), не в еднократна задача |
+| Осем абстракции = over-engineering | всяка абстракция има ≥2 имплементации от ден 1; ако категория остане с една, я премахваме |
+| Overlay тунел е нова атакувана повърхност | ADR-009 контроли + задължителен pentest на `mirage-presence` |
+| Твърде много идеи → нищо завършено | `docs/11-IDEAS.md` е приоритизиран backlog, не план; фази 0–3 са замразени |
 | Правен риск от `brokered` egress | по подразбиране `sinkhole`; `brokered` изисква явно подписано одобрение в UI |

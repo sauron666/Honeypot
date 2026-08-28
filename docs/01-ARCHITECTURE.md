@@ -94,7 +94,54 @@ TCP сесията се "предава" от L1 към L3 чрез connection h
 - Multi-tenancy на ниво Site и на ниво Tenant (за MSSP): RBAC, отделни ключове за
   криптиране на evidence, отделни retention политики.
 
-## 5. Ключови архитектурни решения (ADR резюме)
+## 5. Слой на абстракциите (универсалност)
+
+Ядрото не познава нито един вендор. Между компонентите и външния свят стоят осем
+драйверни интерфейса — `Compute`, `Fabric`, `NAC`, `Identity`, `Observer`,
+`Forensics`, `Sink`, `Intel` (пълна матрица: `docs/10-INTEGRATIONS.md`).
+
+```
+        mirage-director / brain / forge          ← бизнес логика, нула вендори
+                      │
+        ┌─────────────┴─────────────┐
+        │   Driver Registry         │  ← capability декларации на всеки драйвер
+        └─────────────┬─────────────┘
+   ┌────────┬─────────┼─────────┬──────────┬─────────┐
+ Compute  Fabric   Identity  Observer  Forensics   Sink
+ libvirt  nftables    AD      libvmi   Velociraptor syslog
+ proxmox  ovs       EntraID   eBPF     Wazuh        Elastic
+ vsphere  opnsense  Okta      netrecon EDR API      Splunk
+ podman   cisco     FreeIPA   agent    GRR          TheHive
+ aws/az   cloud-sg  Keycloak  snapshot osquery      MISP
+```
+
+Правила:
+- Всяка функция трябва да работи с **поне два драйвера** от категорията си.
+- Всеки драйвер декларира `capabilities`; UI и планировчикът скриват невъзможното.
+- Всяка функция има **degraded режим** (няма VMI → мрежова реконструкция;
+  няма mirror → in-line tap; няма AD → LDAP/IdP драйвер; няма хипервайзор → контейнери).
+- Външни разширения през gRPC plugin SDK, без форк на ядрото.
+
+## 6. Три режима на разполагане в мрежата
+
+| Режим | Как примамките се появяват | Изисква | Кога |
+|---|---|---|---|
+| **Inline** | реални интерфейси в реални VLAN-и | мрежов проект | пълен контрол над средата |
+| **Overlay** ★ | Presence Agent поема свободни IP-та и тунелира (WireGuard) към централните примамки | нищо | MSSP, чужда мрежа, бърз старт |
+| **Cloud** | инстанции/контейнери в VPC + SG правила | cloud права | cloud-native среди |
+
+Overlay режимът е стратегически: премахва най-честата причина deception проекти
+да не тръгнат — "трябва да ви пипнем мрежата".
+
+## 7. Deception-as-Code
+
+Кампаниите се описват декларативно (`Campaign`, `Persona`, `Token`, `Breadcrumb`,
+`Containment`) и се прилагат с `miragectl plan/apply`. Git е източникът на истина;
+drift detection засича както грешка в конфигурацията, така и **атакуващ, който трие
+следи**. Един и същ манифест работи на Proxmox, vSphere и в AWS — само драйверът
+е различен. Детайли: `docs/11-IDEAS.md §1`.
+
+## 8. Ключови архитектурни решения (ADR резюме)
 
 | ADR | Решение | Причина |
 |---|---|---|
@@ -105,5 +152,9 @@ TCP сесията се "предава" от L1 към L3 чрез connection h
 | 005 | Proxmox/libvirt като първи driver, vSphere/cloud после | целевата лаборатория и mid-market |
 | 006 | OCSF като канонична схема, ECS/CEF като export | OCSF е където отива пазарът (AWS/Splunk/CrowdStrike) |
 | 007 | Egress през собствен broker, не през прод firewall | containment трябва да е наша отговорност, не конфигурационна |
+
+| 008 | Осем драйверни абстракции, нула вендори в ядрото | продуктът трябва да работи навсякъде, не само в една лаборатория |
+| 009 | Overlay режим като първокласен, не като хак | най-голямата пречка пред внедряване е мрежовата промяна |
+| 010 | Deception-as-Code като основен интерфейс, UI отгоре | преносимост, одит, GitOps, MSSP мащаб |
 
 Пълните ADR-и: `docs/adr/`.
