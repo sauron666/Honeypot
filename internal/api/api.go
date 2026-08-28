@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -308,7 +309,17 @@ func (s *Server) decoys(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Farm != nil {
 		listeners = s.deps.Farm.Addrs()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"personas": out, "listeners": listeners})
+	// Distinct addresses is the number an operator asks for: how much of the
+	// segment does this deployment actually occupy?
+	addrs := map[string]bool{}
+	for _, l := range listeners {
+		if host, _, err := net.SplitHostPort(l); err == nil {
+			addrs[host] = true
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"personas": out, "listeners": listeners, "projected_addresses": len(addrs),
+	})
 }
 
 func (s *Server) driversList(w http.ResponseWriter, r *http.Request) {

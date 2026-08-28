@@ -22,6 +22,28 @@ type Service interface {
 	Serve(ctx context.Context, conn net.Conn, s *Session) error
 }
 
+// PacketService is a service that speaks UDP. It is answered one datagram at a
+// time and must be stateless.
+//
+// Containment rule for UDP (docs/04): a decoy must never become a reflection
+// and amplification weapon aimed at a third party. UDP source addresses are
+// trivially spoofed, so the server -- not each service -- enforces three limits:
+//
+//   - a reply may exceed the request by at most udpReplyHeadroom bytes,
+//   - a reply may never exceed udpReplyCap bytes,
+//   - each source address gets udpPerSecond datagrams, bursting to udpBurst.
+//
+// Together these hold the amplification factor near one and cap what a spoofed
+// victim can receive at a few kilobytes per second, which is far below the six-
+// to hundred-fold gain that makes a reflector worth using. Strict equality
+// would be safer still, but it would silence protocols like SNMP whose answers
+// are inherently a few bytes longer than their questions -- a decoy that never
+// answers is a decoy an attacker skips.
+type PacketService interface {
+	Service
+	ServePacket(ctx context.Context, s *Session, payload []byte) ([]byte, error)
+}
+
 // ServiceFactory builds a service for a persona.
 type ServiceFactory func(p *Persona, opts map[string]any) (Service, error)
 
@@ -46,9 +68,14 @@ type EngagementResolver interface {
 	Resolve(srcIP, decoyID, service string) string
 }
 
-// ListenerConfig is one bound port.
+// ListenerConfig is one bound port on one address.
+//
+// Address is what makes projection possible: a single process can present the
+// same decoy, or different decoys, on every unused address in a subnet. Leave
+// it empty to use the farm's default bind address.
 type ListenerConfig struct {
 	Service string         `yaml:"service" json:"service"`
+	Address string         `yaml:"address" json:"address"`
 	Port    int            `yaml:"port" json:"port"`
 	Persona string         `yaml:"persona" json:"persona"`
 	DecoyID string         `yaml:"decoy_id" json:"decoy_id"`
@@ -110,11 +137,13 @@ type Server struct {
 
 	personas map[string]*Persona
 
-	mu        sync.Mutex
-	listeners []net.Listener
-	perIP     map[string]int
-	total     int
-	sessions  map[string]*Session
+	mu          sync.Mutex
+	listeners   []net.Listener
+	packetConns []net.PacketConn
+	perIP       map[string]int
+	total       int
+	sessions    map[string]*Session
+	udpBudget   map[string]*rateBucket
 
 	wg     sync.WaitGroup
 	closed bool
@@ -136,9 +165,10 @@ func NewServer(cfg Config, emitter Emitter, resolver EngagementResolver, log *sl
 
 	s := &Server{
 		cfg: cfg, log: log, emitter: emitter, resolver: resolver,
-		personas: map[string]*Persona{},
-		perIP:    map[string]int{},
-		sessions: map[string]*Session{},
+		personas:  map[string]*Persona{},
+		perIP:     map[string]int{},
+		sessions:  map[string]*Session{},
+		udpBudget: map[string]*rateBucket{},
 	}
 	for i, l := range cfg.Listeners {
 		if l.Persona == "" {
@@ -192,7 +222,36 @@ func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
 		return fmt.Errorf("honeyd: build %s service: %w", lc.Service, err)
 	}
 
-	addr := net.JoinHostPort(s.cfg.BindAddr, fmt.Sprint(lc.Port))
+	decoyID := lc.DecoyID
+	if decoyID == "" {
+		decoyID = s.cfg.Identity.DecoyID
+	}
+	bindHost := lc.Address
+	if bindHost == "" {
+		bindHost = s.cfg.BindAddr
+	}
+	addr := net.JoinHostPort(bindHost, fmt.Sprint(lc.Port))
+
+	if ps, ok := svc.(PacketService); ok {
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return fmt.Errorf("honeyd: listen udp %s for %s: %w", addr, lc.Service, err)
+		}
+		s.mu.Lock()
+		s.packetConns = append(s.packetConns, pc)
+		s.mu.Unlock()
+
+		s.log.Info("decoy listening", "service", lc.Service, "addr", addr, "proto", "udp",
+			"persona", lc.Persona, "hostname", p.Hostname, "decoy_id", decoyID)
+
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.packetLoop(ctx, pc, ps, p, decoyID)
+		}()
+		return nil
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("honeyd: listen %s for %s: %w", addr, lc.Service, err)
@@ -202,13 +261,8 @@ func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
 	s.listeners = append(s.listeners, ln)
 	s.mu.Unlock()
 
-	decoyID := lc.DecoyID
-	if decoyID == "" {
-		decoyID = s.cfg.Identity.DecoyID
-	}
-
 	s.log.Info("decoy listening",
-		"service", lc.Service, "addr", addr, "persona", lc.Persona,
+		"service", lc.Service, "addr", addr, "proto", "tcp", "persona", lc.Persona,
 		"hostname", p.Hostname, "decoy_id", decoyID)
 
 	s.wg.Add(1)
@@ -217,6 +271,108 @@ func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
 		s.acceptLoop(ctx, ln, svc, p, decoyID)
 	}()
 	return nil
+}
+
+// packetLoop serves a UDP service, enforcing the anti-amplification rules.
+func (s *Server) packetLoop(ctx context.Context, pc net.PacketConn, svc PacketService, p *Persona, decoyID string) {
+	buf := make([]byte, 64*1024)
+	for {
+		n, remote, err := pc.ReadFrom(buf)
+		if err != nil {
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if closed || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+			continue
+		}
+		payload := append([]byte(nil), buf[:n]...)
+
+		ip := hostOf(remote)
+		if !s.udpAllowed(ip) {
+			continue // rate limited: record nothing, answer nothing
+		}
+
+		sess := s.newSession(ctx, svc.Type(), p, decoyID, remote, pc.LocalAddr())
+		sess.Record("in", payload)
+
+		reply, err := svc.ServePacket(ctx, sess, payload)
+		if err != nil {
+			s.log.Debug("udp service error", "service", svc.Type(), "src", ip, "err", err)
+		}
+		if len(reply) > 0 {
+			if amplificationSafe(len(payload), len(reply)) {
+				sess.Record("out", reply)
+				pc.WriteTo(reply, remote)
+			} else {
+				e := sess.Event(event.ClassContainment, 2, event.SeverityLow).
+					WithMessage("udp reply withheld: %d bytes would amplify a %d byte request",
+						len(reply), len(payload))
+				e.Set("request_bytes", len(payload)).Set("reply_bytes", len(reply)).
+					Set("limit_headroom", udpReplyHeadroom).Set("limit_cap", udpReplyCap)
+				sess.Emit(e)
+			}
+		}
+		s.finishSession(sess, nil)
+	}
+}
+
+// udpAllowed applies a per-source token bucket. UDP sources are trivially
+// spoofed, so the limit is deliberately tight.
+func (s *Server) udpAllowed(ip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.udpBudget[ip]
+	if !ok {
+		if len(s.udpBudget) > 20000 {
+			s.udpBudget = map[string]*rateBucket{}
+		}
+		b = &rateBucket{tokens: udpBurst, last: time.Now()}
+		s.udpBudget[ip] = b
+	}
+	return b.take()
+}
+
+// rateBucket is a simple token bucket.
+type rateBucket struct {
+	tokens float64
+	last   time.Time
+}
+
+const (
+	udpBurst     = 20.0 // datagrams a new source may send immediately
+	udpPerSecond = 5.0  // sustained rate per source
+
+	// udpReplyHeadroom and udpReplyCap bound how much larger than its request a
+	// reply may be. See the PacketService comment for the reasoning.
+	udpReplyHeadroom = 64
+	udpReplyCap      = 512
+)
+
+// amplificationSafe reports whether a reply of replyLen bytes may be sent in
+// answer to a request of reqLen bytes.
+func amplificationSafe(reqLen, replyLen int) bool {
+	return replyLen <= reqLen+udpReplyHeadroom && replyLen <= udpReplyCap
+}
+
+func (b *rateBucket) take() bool {
+	now := time.Now()
+	b.tokens += now.Sub(b.last).Seconds() * udpPerSecond
+	if b.tokens > udpBurst {
+		b.tokens = udpBurst
+	}
+	b.last = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
 }
 
 func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, svc Service, p *Persona, decoyID string) {
@@ -267,37 +423,53 @@ func (s *Server) handle(ctx context.Context, conn net.Conn, svc Service, p *Pers
 	sctx, cancel := context.WithTimeout(ctx, s.cfg.MaxSessionDuration)
 	defer cancel()
 
-	sess := &Session{
-		ID:        event.ShortID("ses"),
-		Service:   svc.Type(),
-		Identity:  Identity{TenantID: s.cfg.Identity.TenantID, SiteID: s.cfg.Identity.SiteID, DecoyID: decoyID, Persona: p.Name},
-		Remote:    conn.RemoteAddr(),
-		Local:     conn.LocalAddr(),
-		Started:   time.Now(),
-		Persona:   p,
-		emitter:   s.emitter,
-		ctx:       sctx,
-		deadline:  time.Now().Add(s.cfg.MaxSessionDuration),
-		maxScript: s.cfg.MaxTranscriptBytes,
-	}
-	if s.resolver != nil {
-		sess.EngagementID = s.resolver.Resolve(sess.SrcIP(), decoyID, svc.Type())
-	}
-
-	s.mu.Lock()
-	s.sessions[sess.ID] = sess
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.sessions, sess.ID)
-		s.mu.Unlock()
-	}()
-
+	sess := s.newSession(sctx, svc.Type(), p, decoyID, conn.RemoteAddr(), conn.LocalAddr())
 	sess.Emit(sess.Event(event.ClassNetworkActivity, 1, event.SeverityLow).
 		WithMessage("connection to %s decoy %s", svc.Type(), p.Hostname))
 
 	conn.SetDeadline(sess.deadline)
 	err := svc.Serve(sctx, conn, sess)
+	s.finishSession(sess, err)
+
+	if err != nil {
+		s.log.Debug("session ended", "service", svc.Type(), "src", sess.SrcIP(), "err", err)
+	}
+}
+
+// newSession registers an interaction and assigns it to an engagement.
+func (s *Server) newSession(ctx context.Context, service string, p *Persona, decoyID string,
+	remote, local net.Addr) *Session {
+
+	sess := &Session{
+		ID:      event.ShortID("ses"),
+		Service: service,
+		Identity: Identity{
+			TenantID: s.cfg.Identity.TenantID, SiteID: s.cfg.Identity.SiteID,
+			DecoyID: decoyID, Persona: p.Name,
+		},
+		Remote:    remote,
+		Local:     local,
+		Started:   time.Now(),
+		Persona:   p,
+		emitter:   s.emitter,
+		ctx:       ctx,
+		deadline:  time.Now().Add(s.cfg.MaxSessionDuration),
+		maxScript: s.cfg.MaxTranscriptBytes,
+	}
+	if s.resolver != nil {
+		sess.EngagementID = s.resolver.Resolve(sess.SrcIP(), decoyID, service)
+	}
+	s.mu.Lock()
+	s.sessions[sess.ID] = sess
+	s.mu.Unlock()
+	return sess
+}
+
+// finishSession emits the closing record that carries the transcript.
+func (s *Server) finishSession(sess *Session, err error) {
+	s.mu.Lock()
+	delete(s.sessions, sess.ID)
+	s.mu.Unlock()
 
 	transcript, truncated := sess.Transcript()
 	end := sess.Event(event.ClassNetworkActivity, 2, event.SeverityLow).
@@ -311,10 +483,6 @@ func (s *Server) handle(ctx context.Context, conn net.Conn, svc Service, p *Pers
 		end.Set("close_reason", err.Error())
 	}
 	sess.Emit(end)
-
-	if err != nil {
-		s.log.Debug("session ended", "service", svc.Type(), "src", sess.SrcIP(), "err", err)
-	}
 }
 
 // admit applies the concurrency limits.
@@ -352,9 +520,12 @@ func (s *Server) ActiveSessions() int {
 func (s *Server) Addrs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]string, 0, len(s.listeners))
+	out := make([]string, 0, len(s.listeners)+len(s.packetConns))
 	for _, l := range s.listeners {
 		out = append(out, l.Addr().String())
+	}
+	for _, pc := range s.packetConns {
+		out = append(out, pc.LocalAddr().String())
 	}
 	return out
 }
@@ -379,11 +550,15 @@ func (s *Server) Close() error {
 	}
 	s.closed = true
 	listeners := s.listeners
-	s.listeners = nil
+	packets := s.packetConns
+	s.listeners, s.packetConns = nil, nil
 	s.mu.Unlock()
 
 	for _, l := range listeners {
 		l.Close()
+	}
+	for _, pc := range packets {
+		pc.Close()
 	}
 	s.wg.Wait()
 	return nil

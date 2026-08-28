@@ -39,6 +39,8 @@ honeyd:
           port: 2121
         - service: telnet
           port: 2323
+        - service: smtp
+          port: 2525
 
     - id: dcy-db01
       persona: linux/db
@@ -47,13 +49,10 @@ honeyd:
           port: 2223
         - service: redis
           port: 6380
-        - service: generic
+        - service: mysql
           port: 3307
-          options:
-            name: mysql
-            # A believable MySQL greeting: version, then the handshake bytes a
-            # scanner expects to see.
-            banner: "J\\x00\\x00\\x00\\n8.0.36-0ubuntu0.22.04.1\\x00"
+        - service: mssql
+          port: 14330
 
     - id: dcy-nas01
       persona: linux/backup
@@ -62,6 +61,33 @@ honeyd:
           port: 2224
         - service: ftp
           port: 2122
+        - service: vnc
+          port: 5901
+        - service: snmp     # UDP; answers are bounded so a decoy never amplifies
+          port: 1161
+
+    # An industrial decoy. A PLC cannot run an agent, which makes a passive
+    # decoy the only detection some plants can have at all.
+    - id: dcy-plc01
+      persona: linux/backup
+      services:
+        - service: modbus
+          port: 5020
+          options:
+            vendor: Siemens
+            product: SIMATIC S7-1200
+            revision: 4.4.1
+
+    # Projection: one decoy occupying several addresses. The addresses must
+    # exist on the host first, e.g.
+    #   ip addr add 10.66.0.31/24 dev eth0
+    # Uncomment once the addresses are configured.
+    # - id: dcy-fleet
+    #   persona: linux/web
+    #   addresses: ["10.66.0.31", "10.66.0.32", "10.66.0.33"]
+    #   services:
+    #     - {service: ssh,  port: 22}
+    #     - {service: http, port: 80}
 
 engagement:
   # How long a source can be quiet before its visit is considered finished.

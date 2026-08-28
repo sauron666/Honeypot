@@ -8,8 +8,11 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,11 +67,18 @@ type HoneydConfig struct {
 	MaxConnsTotal      int           `yaml:"max_conns_total"`
 }
 
-// DecoyConfig is one decoy: an identity plus the ports it answers.
+// DecoyConfig is one decoy: an identity, the addresses it occupies and the
+// ports it answers.
 type DecoyConfig struct {
-	ID       string          `yaml:"id"`
-	Persona  string          `yaml:"persona"`
-	Services []ServiceConfig `yaml:"services"`
+	ID      string `yaml:"id"`
+	Persona string `yaml:"persona"`
+	// Addresses are the IPs this decoy answers on. Empty means the farm's bind
+	// address. Listing several is projection: one process presenting the same
+	// decoy on every unused address in a subnet, which is how a handful of
+	// decoys cover a whole segment. The addresses must exist on the host --
+	// see profiles/README.md for adding them.
+	Addresses []string        `yaml:"addresses"`
+	Services  []ServiceConfig `yaml:"services"`
 }
 
 // ServiceConfig is one listening port on a decoy.
@@ -199,7 +209,7 @@ func (c *Config) Validate() error {
 	}
 
 	seenID := map[string]bool{}
-	seenPort := map[int]string{}
+	seenBind := map[string]string{}
 	for i, d := range c.Honeyd.Decoys {
 		if d.ID == "" {
 			return fmt.Errorf("config: decoy %d has no id", i)
@@ -219,6 +229,11 @@ func (c *Config) Validate() error {
 		if len(d.Services) == 0 {
 			return fmt.Errorf("config: decoy %q has no services", d.ID)
 		}
+		for _, a := range d.Addresses {
+			if net.ParseIP(a) == nil {
+				return fmt.Errorf("config: decoy %q: %q is not a valid IP address", d.ID, a)
+			}
+		}
 		for _, s := range d.Services {
 			if !isKnownService(s.Service) {
 				return fmt.Errorf("config: decoy %q: unknown service %q (available: %s)",
@@ -228,11 +243,14 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: decoy %q service %q: port %d is out of range",
 					d.ID, s.Service, s.Port)
 			}
-			if owner, dup := seenPort[s.Port]; dup {
-				return fmt.Errorf("config: port %d is claimed by both %q and %q",
-					s.Port, owner, d.ID+"/"+s.Service)
+			for _, a := range addressesOf(d, c.Honeyd.Bind) {
+				bind := net.JoinHostPort(a, strconv.Itoa(s.Port))
+				if owner, dup := seenBind[bind]; dup {
+					return fmt.Errorf("config: %s is claimed by both %q and %q",
+						bind, owner, d.ID+"/"+s.Service)
+				}
+				seenBind[bind] = d.ID + "/" + s.Service
 			}
-			seenPort[s.Port] = d.ID + "/" + s.Service
 		}
 	}
 
@@ -276,17 +294,53 @@ func ParseSeverity(s string) (event.Severity, error) {
 	}
 }
 
-// Listeners flattens the decoy definitions into honeyd listeners.
+// addressesOf returns the addresses a decoy occupies, falling back to the
+// farm's bind address when it declares none.
+func addressesOf(d DecoyConfig, bind string) []string {
+	if len(d.Addresses) == 0 {
+		return []string{bind}
+	}
+	return d.Addresses
+}
+
+// Listeners flattens the decoy definitions into honeyd listeners, one per
+// address and service.
 func (c *Config) Listeners() []honeyd.ListenerConfig {
 	var out []honeyd.ListenerConfig
 	for _, d := range c.Honeyd.Decoys {
-		for _, s := range d.Services {
-			out = append(out, honeyd.ListenerConfig{
-				Service: s.Service, Port: s.Port, Persona: d.Persona,
-				DecoyID: d.ID, Options: s.Options,
-			})
+		for _, addr := range addressesOf(d, c.Honeyd.Bind) {
+			for _, s := range d.Services {
+				lc := honeyd.ListenerConfig{
+					Service: s.Service, Port: s.Port, Persona: d.Persona,
+					DecoyID: d.ID, Options: s.Options,
+				}
+				// Only pin the address when the decoy asked for specific ones;
+				// otherwise the farm's bind address applies.
+				if len(d.Addresses) > 0 {
+					lc.Address = addr
+				}
+				out = append(out, lc)
+			}
 		}
 	}
+	return out
+}
+
+// ProjectedAddresses reports every address the deployment occupies, which is
+// the number an operator cares about when asking "how much of my subnet does
+// this cover?".
+func (c *Config) ProjectedAddresses() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range c.Honeyd.Decoys {
+		for _, a := range addressesOf(d, c.Honeyd.Bind) {
+			if !seen[a] {
+				seen[a] = true
+				out = append(out, a)
+			}
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 

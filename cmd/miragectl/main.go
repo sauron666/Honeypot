@@ -163,9 +163,9 @@ func listPersonas() error {
 func suggestedServices(persona string) string {
 	switch persona {
 	case "linux/web":
-		return "ssh, http, ftp"
+		return "ssh, http, ftp, smtp"
 	case "linux/db":
-		return "ssh, redis, generic(mysql)"
+		return "ssh, mysql, mssql, redis"
 	case "linux/backup":
 		return "ssh, ftp, telnet"
 	default:
@@ -183,6 +183,12 @@ func listServices() error {
 		"ftp":     "FTP with passive data transfers; records downloads and captures uploads",
 		"redis":   "unauthenticated Redis; captures the CONFIG SET / SAVE takeover chain",
 		"generic": "any TCP port; records banners, payloads and bare port scans",
+		"mysql":   "real MySQL protocol; verifies planted passwords and records crackable scrambles",
+		"mssql":   "TDS login; recovers the plaintext password TDS only obfuscates",
+		"vnc":     "RFB with VNC auth; records the DES challenge and response",
+		"smtp":    "mail server that never delivers; captures credentials and open-relay probes",
+		"snmp":    "SNMP v1/v2c over UDP; records community strings, never amplifies",
+		"modbus":  "Modbus/TCP PLC; reads are recon, writes are treated as process manipulation",
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SERVICE\tDESCRIPTION")
