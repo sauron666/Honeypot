@@ -247,6 +247,11 @@ type ObserverDriver interface {
 // ErrObserveUnsupported is returned by observers that cannot stream sightings.
 var ErrObserveUnsupported = errors.New("drivers: this observer cannot stream sightings")
 
+// ErrNoOp is returned by a "none" driver whose whole purpose is to do nothing,
+// so a caller can tell "nothing happened, and that is expected here" apart from
+// a real failure.
+var ErrNoOp = errors.New("drivers: this driver performs no action")
+
 // ---------------------------------------------------------------------------
 // Sink
 // ---------------------------------------------------------------------------

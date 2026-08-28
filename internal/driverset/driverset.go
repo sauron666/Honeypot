@@ -36,7 +36,10 @@ func Default() *drivers.Registry {
 	r.Register(observer.NoneInfo(), observer.NewNone)
 	r.Register(observer.DrakvufInfo(), observer.NewDrakvuf)
 
-	// NAC: steering unknown devices into the honeynet.
+	// NAC: steering unknown devices into the honeynet. Two implementations so
+	// the category is a real abstraction (ADR-008): freeradius steers via
+	// RADIUS CoA, none is the honest choice with no 802.1X fabric.
+	r.Register(nac.NoneInfo(), nac.NewNone)
 	r.Register(nac.RadiusInfo(), nac.NewRadius)
 
 	// Sinks.

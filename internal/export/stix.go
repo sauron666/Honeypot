@@ -118,10 +118,19 @@ func TheHiveAlert(title, description, srcIP, service string, severity int, techn
 func IOCList(observations []Observation) string {
 	var b strings.Builder
 	b.WriteString("type\tvalue\tservice\ttechnique\ttimestamp\n")
+	// Deduplicate on type+value: the same address or URL is seen many times in
+	// one intrusion, and a feed that repeats each IOC is noise a TIP has to
+	// clean up. The first sighting's context is kept.
+	seen := map[string]bool{}
 	for _, obs := range observations {
 		if obs.IOCValue == "" {
 			continue
 		}
+		key := obs.IOCType + "\x00" + obs.IOCValue
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		b.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\t%s\n",
 			obs.IOCType, obs.IOCValue, obs.Service, obs.Technique,
 			obs.Timestamp.UTC().Format(time.RFC3339)))
