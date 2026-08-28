@@ -20,6 +20,11 @@ type Memory struct {
 	bufSize int
 	log     *slog.Logger
 
+	// wg tracks subscriber goroutines so that Close can wait for in-flight
+	// handlers. Without it a caller that has shut everything down can still
+	// have handlers writing evidence and alerts underneath it.
+	wg sync.WaitGroup
+
 	// dropped counts events shed by full subscriber queues; surfaced through
 	// Stats so that a silent loss of evidence is impossible.
 	dropped uint64
@@ -129,7 +134,9 @@ func (m *Memory) Subscribe(subject string, h Handler) (Subscription, error) {
 	m.subs[s.id] = s
 	m.mu.Unlock()
 
+	m.wg.Add(1)
 	go func() {
+		defer m.wg.Done()
 		for {
 			select {
 			case e := <-s.ch:
@@ -175,5 +182,8 @@ func (m *Memory) Close() error {
 	for _, s := range subs {
 		s.Unsubscribe()
 	}
+	// Wait for every subscriber to finish draining. Returning earlier would
+	// mean "closed" is a lie: handlers would still be writing.
+	m.wg.Wait()
 	return nil
 }

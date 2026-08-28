@@ -41,6 +41,11 @@ honeyd:
           port: 2323
         - service: smtp
           port: 2525
+        # Honeytoken callbacks. This must be reachable by whoever finds a
+        # token, which is why it is a decoy service and not part of the
+        # management API.
+        - service: tokens
+          port: 8081
 
     - id: dcy-db01
       persona: linux/db
@@ -101,6 +106,11 @@ alerts:
     - driver: file
       config:
         path: alerts.jsonl
+
+tokens:
+  # What an attacker can reach. Minted callback URLs point here, so it has to
+  # be the decoy-facing address, never the management one.
+  base_url: http://127.0.0.1:8081
 
 storage:
   memory_window: 200000

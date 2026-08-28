@@ -209,3 +209,42 @@ func waitOrFail(t *testing.T, wg *sync.WaitGroup, d time.Duration) {
 		t.Fatal("timed out waiting for deliveries")
 	}
 }
+
+func TestCloseWaitsForInFlightHandlers(t *testing.T) {
+	// Close must not return while handlers are still running: callers shut
+	// down storage right afterwards, and a handler still writing to it is a
+	// corrupt file or a lost event.
+	b := NewMemory(64, slog.New(slog.DiscardHandler))
+
+	var (
+		mu        sync.Mutex
+		completed int
+		started   = make(chan struct{}, 1)
+	)
+	b.Subscribe("mirage.events.>", func(context.Context, *event.Event) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		time.Sleep(150 * time.Millisecond)
+		mu.Lock()
+		completed++
+		mu.Unlock()
+	})
+
+	for i := 0; i < 5; i++ {
+		if err := b.Publish(context.Background(), testEvent()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-started // make sure at least one handler is mid-flight
+
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if completed != 5 {
+		t.Fatalf("Close returned with %d of 5 handlers finished", completed)
+	}
+}

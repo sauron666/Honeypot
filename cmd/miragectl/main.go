@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -34,6 +35,7 @@ commands:
   drivers     list registered drivers and their capabilities
   verify      replay an evidence file's hash chain
   events      query an evidence file offline
+  tokens      list, mint or delete honeytokens through a running director
   status      query a running director over its API
   version     print the version
 
@@ -62,6 +64,8 @@ func main() {
 		err = verify(args)
 	case "events":
 		err = events(args)
+	case "tokens":
+		err = tokensCmd(args)
 	case "status":
 		err = status(args)
 	case "version":
@@ -290,6 +294,74 @@ func events(args []string) error {
 	return w.Flush()
 }
 
+// tokensCmd manages honeytokens through a running director.
+func tokensCmd(args []string) error {
+	fs := flag.NewFlagSet("tokens", flag.ExitOnError)
+	addr := fs.String("api", "http://127.0.0.1:8422", "director API base URL")
+	token := fs.String("token", "", "bearer token, if the API requires one")
+	mint := fs.String("mint", "", "mint a token of this type (url, aws-key, office-doc, ...)")
+	label := fs.String("label", "", "human label for the minted token")
+	location := fs.String("location", "", "where the token will be planted")
+	del := fs.String("delete", "", "delete the token with this id")
+	fs.Parse(args)
+
+	switch {
+	case *mint != "":
+		body, _ := json.Marshal(map[string]string{
+			"type": *mint, "label": *label, "location": *location,
+		})
+		raw, err := apiDo(http.MethodPost, *addr+"/api/tokens", *token, body)
+		if err != nil {
+			return err
+		}
+		var t map[string]any
+		if err := json.Unmarshal(raw, &t); err != nil {
+			return err
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(t); err != nil {
+			return err
+		}
+		if id, ok := t["id"].(string); ok && *mint == "office-doc" {
+			fmt.Printf("\nfetch the bait document with:\n  curl -OJ %s/api/tokens/%s/docx\n", *addr, id)
+		}
+		return nil
+
+	case *del != "":
+		_, err := apiDo(http.MethodDelete, *addr+"/api/tokens/"+*del, *token, nil)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("deleted %s\n", *del)
+		return nil
+	}
+
+	raw, err := apiGet(*addr+"/api/tokens", *token)
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Tokens []struct {
+			ID, Type, Label, Value, Location string
+			Triggers                         int
+		} `json:"tokens"`
+		Total, Triggered int
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID	TYPE	TRIGGERS	LABEL	PLANTED AT	VALUE")
+	for _, t := range resp.Tokens {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\n",
+			t.ID, t.Type, t.Triggers, orDash(t.Label), orDash(t.Location), truncate(t.Value, 44))
+	}
+	w.Flush()
+	fmt.Printf("\n%d token(s), %d triggered\n", resp.Total, resp.Triggered)
+	return nil
+}
+
 func status(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	addr := fs.String("api", "http://127.0.0.1:8422", "director API base URL")
@@ -309,10 +381,19 @@ func status(args []string) error {
 	return enc.Encode(s)
 }
 
-func apiGet(url, token string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func apiGet(url, token string) ([]byte, error) { return apiDo(http.MethodGet, url, token, nil) }
+
+func apiDo(method, url, token string, body []byte) ([]byte, error) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, rdr)
 	if err != nil {
 		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -323,10 +404,14 @@ func apiGet(url, token string) ([]byte, error) {
 		return nil, fmt.Errorf("cannot reach the director at %s: %w", url, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s returned %s", url, resp.Status)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
+	if err != nil {
+		return nil, err
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s returned %s: %s", url, resp.Status, strings.TrimSpace(string(raw)))
+	}
+	return raw, nil
 }
 
 func orDash(s string) string {

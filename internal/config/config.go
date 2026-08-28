@@ -42,6 +42,16 @@ type Config struct {
 	Alerts     AlertConfig      `yaml:"alerts"`
 	Storage    StorageConfig    `yaml:"storage"`
 	Drivers    DriverConfig     `yaml:"drivers"`
+	Tokens     TokenConfig      `yaml:"tokens"`
+}
+
+// TokenConfig configures honeytoken minting.
+type TokenConfig struct {
+	// BaseURL is the address an attacker can reach, and is what minted callback
+	// URLs point at. It must be reachable from wherever the token will be
+	// planted -- which is emphatically not the management address.
+	BaseURL string `yaml:"base_url"`
+	File    string `yaml:"file"`
 }
 
 // APIConfig configures the management API and UI.
@@ -197,6 +207,26 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Drivers.Compute == "" {
 		c.Drivers.Compute = "inproc"
+	}
+	if c.Tokens.File == "" {
+		c.Tokens.File = filepath.Join(c.DataDir, "tokens.json")
+	}
+	if c.Tokens.BaseURL == "" {
+		// Fall back to the first tokens listener, if the deployment has one.
+		for _, d := range c.Honeyd.Decoys {
+			for _, s := range d.Services {
+				if s.Service == "tokens" {
+					host := c.Honeyd.Bind
+					if len(d.Addresses) > 0 {
+						host = d.Addresses[0]
+					}
+					if host == "0.0.0.0" || host == "" {
+						host = "127.0.0.1"
+					}
+					c.Tokens.BaseURL = fmt.Sprintf("http://%s:%d", host, s.Port)
+				}
+			}
+		}
 	}
 }
 

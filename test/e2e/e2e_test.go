@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -533,4 +534,164 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestHoneytokenFiresBothWays covers the two ways a token triggers: someone
+// fetches its callback URL, and someone carries its value onto a decoy.
+func TestHoneytokenFiresBothWays(t *testing.T) {
+	dir := t.TempDir()
+	ports := map[string]int{"api": freePort(t), "tokens": freePort(t), "telnet": freePort(t)}
+
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+tenant: e2e
+site: lab
+data_dir: %s
+api: {listen: "127.0.0.1:%d"}
+tokens:
+  base_url: "http://127.0.0.1:%d"
+honeyd:
+  bind: 127.0.0.1
+  decoys:
+    - id: dcy-web01
+      persona: linux/web
+      services:
+        - {service: tokens, port: %d}
+        - {service: telnet, port: %d}
+alerts:
+  min_severity: high
+  sinks: [{driver: file, config: {path: alerts.jsonl}}]
+`, dir, ports["api"], ports["tokens"], ports["tokens"], ports["telnet"])))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.New(cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		a.Stop(ctx)
+	}()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", ports["api"])
+	waitUntil(t, 10*time.Second, "api", func() bool {
+		resp, err := http.Get(base + "/api/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	})
+
+	// Mint two tokens through the API, as an operator would.
+	mint := func(kind, label, location string) map[string]any {
+		body, _ := json.Marshal(map[string]string{"type": kind, "label": label, "location": location})
+		resp, err := http.Post(base+"/api/tokens", "application/json", strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("mint %s: %s", kind, resp.Status)
+		}
+		var out map[string]any
+		json.NewDecoder(resp.Body).Decode(&out)
+		return out
+	}
+	urlToken := mint("url", "quarterly results link", "email signature")
+	awsToken := mint("aws-key", "finance share key", `\\FS01\finance\backup.ps1`)
+
+	// --- way one: the callback is fetched ---------------------------------
+	resp, err := http.Get(urlToken["value"].(string))
+	if err != nil {
+		t.Fatalf("fetching the canary URL: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("canary URL returned %s; it must look unremarkable", resp.Status)
+	}
+
+	// --- way two: the value turns up on a decoy ---------------------------
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", ports["telnet"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(40 * time.Second))
+	r := bufio.NewReader(conn)
+	expect(t, r, "login:")
+	fmt.Fprint(conn, "root\r\n")
+	expect(t, r, "Password:")
+	fmt.Fprint(conn, "toor\r\n")
+	expect(t, r, "root@")
+	// The attacker pastes the key they found on the file share.
+	fmt.Fprintf(conn, "export AWS_ACCESS_KEY_ID=%s\r\n", awsToken["value"])
+	expect(t, r, "root@")
+
+	// --- assertions --------------------------------------------------------
+	var tokenResp struct {
+		Tokens []struct {
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Triggers int    `json:"triggers"`
+		} `json:"tokens"`
+		Triggered int `json:"triggered"`
+	}
+	waitUntil(t, 10*time.Second, "both tokens to fire", func() bool {
+		d := deployment{api: base}
+		d.getJSON(t, "/api/tokens", &tokenResp)
+		return tokenResp.Triggered == 2
+	})
+	for _, tok := range tokenResp.Tokens {
+		if tok.Triggers == 0 {
+			t.Errorf("token %s (%s) did not fire", tok.ID, tok.Type)
+		}
+	}
+
+	var evResp struct {
+		Events []*event.Event `json:"events"`
+	}
+	d := deployment{api: base}
+	d.getJSON(t, "/api/events?limit=500", &evResp)
+
+	var callback, observed *event.Event
+	for _, e := range evResp.Events {
+		if e.ClassUID != event.ClassTokenTriggered {
+			continue
+		}
+		switch e.GetString("trigger_method") {
+		case "callback":
+			callback = e
+		case "observed":
+			observed = e
+		}
+	}
+	if callback == nil {
+		t.Fatal("no callback trigger was recorded")
+	}
+	if observed == nil {
+		t.Fatal("no observed trigger was recorded: a planted key carried onto a decoy must fire")
+	}
+	// The location is what turns an alert into an investigation.
+	if observed.GetString("token_location") != `\\FS01\finance\backup.ps1` {
+		t.Fatalf("observed trigger lost the plant location: %q", observed.GetString("token_location"))
+	}
+	if observed.SeverityID != event.SeverityCritical || callback.SeverityID != event.SeverityCritical {
+		t.Error("token triggers must be critical: there is no benign explanation")
+	}
+
+	// The bait document must be generated on demand and be a real package.
+	docResp, err := http.Get(base + "/api/tokens/" + urlToken["id"].(string) + "/docx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer docResp.Body.Close()
+	doc, _ := io.ReadAll(docResp.Body)
+	if len(doc) < 512 || string(doc[:2]) != "PK" {
+		t.Fatalf("the generated document is not a zip package (%d bytes)", len(doc))
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/store"
+	"github.com/sauron666/Honeypot/internal/tokens"
 	"github.com/sauron666/Honeypot/internal/version"
 )
 
@@ -39,6 +41,7 @@ type Deps struct {
 	Farm       *honeyd.Server
 	Registry   *drivers.Registry
 	Dispatcher *alert.Dispatcher
+	Tokens     *tokens.Store
 	Tenant     string
 	Site       string
 	StartedAt  time.Time
@@ -87,6 +90,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/decoys", s.decoys)
 	s.mux.HandleFunc("GET /api/drivers", s.driversList)
 	s.mux.HandleFunc("POST /api/evidence/verify", s.verify)
+	s.mux.HandleFunc("GET /api/tokens", s.listTokens)
+	s.mux.HandleFunc("POST /api/tokens", s.mintToken)
+	s.mux.HandleFunc("DELETE /api/tokens/{id}", s.deleteToken)
+	s.mux.HandleFunc("GET /api/tokens/{id}/docx", s.tokenDocx)
 
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -168,8 +175,13 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Farm != nil {
 		sessions = s.deps.Farm.ActiveSessions()
 	}
+	tokenTotal, tokenFired := 0, 0
+	if s.deps.Tokens != nil {
+		tokenTotal, tokenFired = s.deps.Tokens.Stats()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"tenant": s.deps.Tenant, "site": s.deps.Site,
+		"tokens":  map[string]int{"total": tokenTotal, "triggered": tokenFired},
 		"version": version.String(),
 		"uptime":  time.Since(s.deps.StartedAt).Round(time.Second).String(),
 		"storage": s.deps.Store.Stats(),
@@ -328,6 +340,79 @@ func (s *Server) driversList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"drivers": s.deps.Registry.Available()})
+}
+
+func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Tokens == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"tokens": []any{}})
+		return
+	}
+	list := s.deps.Tokens.List()
+	total, triggered := s.deps.Tokens.Stats()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tokens": list, "total": total, "triggered": triggered, "types": tokens.AllTypes(),
+	})
+}
+
+func (s *Server) mintToken(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Tokens == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tokens are not configured"})
+		return
+	}
+	var req struct {
+		Type     string `json:"type"`
+		Label    string `json:"label"`
+		Location string `json:"location"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	t, err := s.deps.Tokens.Mint(tokens.Type(req.Type), req.Label, req.Location)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, t)
+}
+
+func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Tokens == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tokens are not configured"})
+		return
+	}
+	if err := s.deps.Tokens.Delete(r.PathValue("id")); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// tokenDocx builds the bait document for a token, ready to be planted.
+func (s *Server) tokenDocx(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Tokens == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tokens are not configured"})
+		return
+	}
+	t, ok := s.deps.Tokens.Get(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such token"})
+		return
+	}
+	title := t.Label
+	if title == "" {
+		title = "Confidential"
+	}
+	doc, err := tokens.GenerateDocx(t, title,
+		"This document is confidential and intended for internal use only.")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+t.ID+`.docx"`)
+	w.Write(doc)
 }
 
 // verify replays the durable hash chain. It is the operation an analyst runs

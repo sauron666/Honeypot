@@ -25,6 +25,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/store"
+	"github.com/sauron666/Honeypot/internal/tokens"
 )
 
 // App is an assembled deployment.
@@ -37,6 +38,7 @@ type App struct {
 	Registry   *drivers.Registry
 	Farm       *honeyd.Server
 	API        *api.Server
+	Tokens     *tokens.Store
 
 	log     *slog.Logger
 	started time.Time
@@ -108,6 +110,20 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		return nil, err
 	}
 
+	a.Tokens, err = tokens.NewStore(cfg.Tokens.File, cfg.Tokens.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	// Tokens fire two ways: a callback the attacker makes, and the planted
+	// value turning up in something they did on a decoy. The watcher covers
+	// the second, which is the half nobody else implements.
+	watcher := tokens.NewWatcher(a.Tokens, cfg.Tenant, cfg.Site, func(ctx context.Context, e *event.Event) {
+		a.ingest(ctx, e, true)
+	})
+	if _, err := a.Bus.Subscribe(bus.SubjectAll, watcher.Handle); err != nil {
+		return nil, err
+	}
+
 	hcfg := cfg.HoneydConfig()
 	hcfg.DeploySeed = cfg.DeploySeed
 	for i := range hcfg.Listeners {
@@ -118,6 +134,11 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		// changing SSH host key is one of the clearest honeypot tells there is.
 		if _, ok := hcfg.Listeners[i].Options["host_key_path"]; !ok {
 			hcfg.Listeners[i].Options["host_key_path"] = filepath.Join(cfg.DataDir, "hostkeys")
+		}
+		// The token receiver needs to resolve ids, but honeyd must not know how
+		// tokens are stored, so the lookup is injected here.
+		if hcfg.Listeners[i].Service == "tokens" {
+			hcfg.Listeners[i].Options["lookup"] = honeyd.TokenLookup(a.lookupToken)
 		}
 	}
 	emitter := honeyd.EmitterFunc(func(ctx context.Context, e *event.Event) {
@@ -130,13 +151,22 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	a.API, err = api.New(cfg.API.Listen, api.Deps{
 		Store: evStore, Tracker: a.Tracker, Farm: a.Farm, Registry: a.Registry,
-		Dispatcher: a.Dispatcher, Tenant: cfg.Tenant, Site: cfg.Site,
+		Dispatcher: a.Dispatcher, Tokens: a.Tokens, Tenant: cfg.Tenant, Site: cfg.Site,
 		StartedAt: a.started, Log: log, Token: cfg.API.Token,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return a, nil
+}
+
+// lookupToken resolves and fires a honeytoken by id.
+func (a *App) lookupToken(id string) (label, kind, location string, ok bool) {
+	t, ok := a.Tokens.Fire(id)
+	if !ok {
+		return "", "", "", false
+	}
+	return t.Label, string(t.Type), t.Location, true
 }
 
 // ingest is the single path every event takes: sealed into the evidence chain
