@@ -25,6 +25,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/forge"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/store"
 	"github.com/sauron666/Honeypot/internal/tokens"
@@ -87,6 +88,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/engagements", s.engagements)
 	s.mux.HandleFunc("GET /api/engagements/{id}", s.engagementByID)
 	s.mux.HandleFunc("GET /api/engagements/{id}/events", s.engagementEvents)
+	s.mux.HandleFunc("GET /api/engagements/{id}/forge", s.forgeEngagement)
 	s.mux.HandleFunc("GET /api/decoys", s.decoys)
 	s.mux.HandleFunc("GET /api/drivers", s.driversList)
 	s.mux.HandleFunc("POST /api/evidence/verify", s.verify)
@@ -297,6 +299,67 @@ func (s *Server) engagementEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": evs, "count": len(evs)})
+}
+
+// forgeEngagement turns one engagement into detection content for the real
+// network: Sigma, Suricata, YARA, a STIX bundle and an incident report.
+func (s *Server) forgeEngagement(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	evs, err := s.deps.Store.Query(r.Context(), store.Query{
+		EngagementID: id, Ascending: true, Limit: 5000,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(evs) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no events for that engagement"})
+		return
+	}
+
+	eng, ok := (*engagement.Engagement)(nil), false
+	if s.deps.Tracker != nil {
+		eng, ok = s.deps.Tracker.Get(id)
+	}
+	if !ok {
+		// Rebuild from the evidence: an engagement that has aged out of the
+		// tracker must still be reportable.
+		if rebuilt := engagement.FromEvents(evs); len(rebuilt) > 0 {
+			eng = rebuilt[0]
+		} else {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such engagement"})
+			return
+		}
+	}
+
+	bundle := forge.New().Build(eng, evs)
+
+	switch r.URL.Query().Get("format") {
+	case "sigma", "suricata", "yara":
+		f := forge.Format(r.URL.Query().Get("format"))
+		var b strings.Builder
+		for _, rule := range bundle.RulesOf(f) {
+			b.WriteString(rule.Content)
+			if !strings.HasSuffix(rule.Content, "\n") {
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
+		writeText(w, b.String())
+	case "stix":
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Write([]byte(bundle.STIX))
+	case "report":
+		writeText(w, bundle.Report)
+	default:
+		writeJSON(w, http.StatusOK, bundle)
+	}
+}
+
+func writeText(w http.ResponseWriter, s string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte(s))
 }
 
 func (s *Server) decoys(w http.ResponseWriter, r *http.Request) {

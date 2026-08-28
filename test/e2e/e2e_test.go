@@ -245,6 +245,69 @@ func TestFullIntrusionProducesOneEngagement(t *testing.T) {
 		t.Fatalf("evidence chain does not verify: %s", verify.Error)
 	}
 
+	// --- the forge turns the engagement into detection content -------------
+	forgeResp, err := http.Get(d.api + "/api/engagements/" + eng.ID + "/forge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle struct {
+		Rules []struct {
+			Format, Title, Content string
+		} `json:"rules"`
+		IOCs []struct {
+			Type, Value string
+		} `json:"iocs"`
+		Report string `json:"report"`
+		STIX   string `json:"stix"`
+	}
+	json.NewDecoder(forgeResp.Body).Decode(&bundle)
+	forgeResp.Body.Close()
+
+	if len(bundle.Rules) < 3 {
+		t.Fatalf("the forge produced %d rules from a full intrusion", len(bundle.Rules))
+	}
+	formats := map[string]bool{}
+	for _, r := range bundle.Rules {
+		formats[r.Format] = true
+		if strings.TrimSpace(r.Content) == "" {
+			t.Errorf("rule %q has no content", r.Title)
+		}
+	}
+	for _, want := range []string{"sigma", "suricata"} {
+		if !formats[want] {
+			t.Errorf("no %s rules were generated", want)
+		}
+	}
+	if !strings.Contains(bundle.Report, "# Incident report") {
+		t.Error("no incident report was generated")
+	}
+	var stixBundle map[string]any
+	if err := json.Unmarshal([]byte(bundle.STIX), &stixBundle); err != nil {
+		t.Errorf("the STIX bundle is not valid JSON: %v", err)
+	}
+	var sawPayloadURL bool
+	for _, i := range bundle.IOCs {
+		if i.Type == "url" && strings.Contains(i.Value, "198.51.100.66") {
+			sawPayloadURL = true
+		}
+	}
+	if !sawPayloadURL {
+		t.Error("the payload URL did not become an indicator")
+	}
+
+	// The same content must be available in the raw formats a SIEM ingests.
+	for _, format := range []string{"sigma", "suricata", "report", "stix"} {
+		resp, err := http.Get(d.api + "/api/engagements/" + eng.ID + "/forge?format=" + format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if len(body) == 0 {
+			t.Errorf("format %s returned nothing", format)
+		}
+	}
+
 	// --- assertions on alerting -------------------------------------------
 	alertPath := filepath.Join(d.dir, "alerts.jsonl")
 	raw, err := os.ReadFile(alertPath)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -18,7 +19,9 @@ import (
 
 	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/driverset"
+	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/forge"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/store"
 	"github.com/sauron666/Honeypot/internal/version"
@@ -35,6 +38,7 @@ commands:
   drivers     list registered drivers and their capabilities
   verify      replay an evidence file's hash chain
   events      query an evidence file offline
+  forge       turn a recorded engagement into Sigma, Suricata, YARA and STIX
   tokens      list, mint or delete honeytokens through a running director
   status      query a running director over its API
   version     print the version
@@ -66,6 +70,8 @@ func main() {
 		err = events(args)
 	case "tokens":
 		err = tokensCmd(args)
+	case "forge":
+		err = forgeCmd(args)
 	case "status":
 		err = status(args)
 	case "version":
@@ -359,6 +365,114 @@ func tokensCmd(args []string) error {
 	}
 	w.Flush()
 	fmt.Printf("\n%d token(s), %d triggered\n", resp.Total, resp.Triggered)
+	return nil
+}
+
+// forgeCmd generates detection content from a recorded engagement, offline.
+//
+// It works straight from the evidence file, so an analyst can produce rules and
+// a report for an incident from months ago without a running director.
+func forgeCmd(args []string) error {
+	fs := flag.NewFlagSet("forge", flag.ExitOnError)
+	path := fs.String("file", "data/evidence.jsonl", "evidence file")
+	engID := fs.String("engagement", "", "engagement id (default: the highest-risk one in the file)")
+	outDir := fs.String("out", "", "write the artifacts into this directory instead of stdout")
+	fs.Parse(args)
+
+	st, err := store.OpenFile(*path, store.FileOptions{MemoryWindow: 500_000, SyncEvery: 0})
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	all, err := st.Query(context.Background(), store.Query{Limit: 1_000_000, Ascending: true})
+	if err != nil {
+		return err
+	}
+	engagements := engagement.FromEvents(all)
+	if len(engagements) == 0 {
+		return fmt.Errorf("no engagements in %s", *path)
+	}
+
+	eng := engagements[0] // FromEvents sorts by risk
+	if *engID != "" {
+		eng = nil
+		for _, e := range engagements {
+			if e.ID == *engID {
+				eng = e
+			}
+		}
+		if eng == nil {
+			return fmt.Errorf("engagement %q is not in %s", *engID, *path)
+		}
+	}
+
+	var events []*event.Event
+	for _, e := range all {
+		if e.Mirage.EngagementID == eng.ID {
+			events = append(events, e)
+		}
+	}
+	bundle := forge.New().Build(eng, events)
+
+	if *outDir == "" {
+		fmt.Print(bundle.Report)
+		fmt.Printf("\n---\n\n%d rule(s) generated, %d candidate(s) rejected. "+
+			"Re-run with -out <dir> to write them.\n", len(bundle.Rules), len(bundle.Rejected))
+		return nil
+	}
+	return writeBundle(*outDir, eng.ID, bundle)
+}
+
+func writeBundle(dir, engID string, b *forge.Bundle) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	write := func(name, content string) error {
+		if strings.TrimSpace(content) == "" {
+			return nil
+		}
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o640); err != nil {
+			return err
+		}
+		fmt.Printf("  wrote %s\n", p)
+		return nil
+	}
+
+	var sigma, suricata, yara strings.Builder
+	for _, r := range b.Rules {
+		switch r.Format {
+		case forge.FormatSigma:
+			sigma.WriteString(r.Content + "\n")
+		case forge.FormatSuricata:
+			suricata.WriteString(r.Content + "\n")
+		case forge.FormatYARA:
+			yara.WriteString(r.Content + "\n")
+		}
+	}
+	for _, f := range []struct{ name, content string }{
+		{"report.md", b.Report},
+		{"sigma-" + engID + ".yml", sigma.String()},
+		{"suricata-" + engID + ".rules", suricata.String()},
+		{"captured-" + engID + ".yar", yara.String()},
+		{"stix-" + engID + ".json", b.STIX},
+	} {
+		if err := write(f.name, f.content); err != nil {
+			return err
+		}
+	}
+
+	var iocs strings.Builder
+	for _, i := range b.IOCs {
+		fmt.Fprintf(&iocs, "%s\t%s\t%s\n", i.Type, i.Value, i.Context)
+	}
+	if err := write("iocs-"+engID+".tsv", iocs.String()); err != nil {
+		return err
+	}
+
+	fmt.Printf("\n%d rule(s), %d indicator(s), %d rejected candidate(s).\n",
+		len(b.Rules), len(b.IOCs), len(b.Rejected))
 	return nil
 }
 

@@ -143,51 +143,8 @@ func (t *Tracker) Observe(e *event.Event) {
 	}
 
 	eng.LastSeen = t.now()
-	eng.Events++
 	eng.TenantID, eng.SiteID = e.Mirage.TenantID, e.Mirage.SiteID
-	if e.SeverityID > eng.MaxSeverity {
-		eng.MaxSeverity = e.SeverityID
-	}
-	addUnique(&eng.Decoys, e.Mirage.DecoyID)
-	addUnique(&eng.Services, e.Mirage.Service)
-	for _, tech := range e.Mirage.Attack {
-		if tech.Technique != "" {
-			addUnique(&eng.Techniques, tech.Technique)
-		}
-	}
-
-	switch e.ClassUID {
-	case event.ClassCredentialOffer:
-		eng.Credentials++
-		addPhase(eng, PhaseCredent)
-		if v, _ := e.Get("accepted"); v == true {
-			eng.Authenticated = true
-			addPhase(eng, PhaseAccess)
-		}
-	case event.ClassAuthentication:
-		eng.Authenticated = true
-		addPhase(eng, PhaseAccess)
-	case event.ClassCommandExecuted:
-		eng.Commands++
-		addPhase(eng, PhaseDiscover)
-	case event.ClassFileActivity:
-		if tok := e.GetString("honeytoken"); tok != "" {
-			addUnique(&eng.HoneytokensHit, tok)
-			addPhase(eng, PhaseCredent)
-		}
-	case event.ClassDetectionFinding:
-		if u := e.GetString("url"); u != "" {
-			addUnique(&eng.PayloadURLs, u)
-		}
-	}
-	for _, tech := range e.Mirage.Attack {
-		switch tech.Tactic {
-		case "TA0008":
-			addPhase(eng, PhaseLateral)
-		case "TA0040":
-			addPhase(eng, PhaseImpact)
-		}
-	}
+	applyEvent(eng, e)
 
 	eng.RiskScore = score(eng)
 	eng.Summary = summarize(eng)
@@ -399,4 +356,105 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// FromEvents reconstructs engagements from stored events.
+//
+// The live tracker is not available when working from an evidence file -- an
+// analyst opening last month's incident, or `miragectl forge` running offline
+// -- so the same state machine is replayed over the record instead. This is why
+// every event carries its engagement id: the story can always be rebuilt.
+func FromEvents(events []*event.Event) []*Engagement {
+	byID := map[string]*Engagement{}
+	var order []string
+
+	for _, e := range events {
+		id := e.Mirage.EngagementID
+		if id == "" {
+			continue
+		}
+		eng, ok := byID[id]
+		if !ok {
+			eng = &Engagement{
+				ID: id, TenantID: e.Mirage.TenantID, SiteID: e.Mirage.SiteID,
+				StartedAt: e.Timestamp(), LastSeen: e.Timestamp(),
+				Phases: []Phase{PhaseRecon},
+			}
+			if e.Src != nil {
+				eng.SrcIP = e.Src.IP
+			}
+			byID[id] = eng
+			order = append(order, id)
+		}
+		if t := e.Timestamp(); t.Before(eng.StartedAt) {
+			eng.StartedAt = t
+		} else if t.After(eng.LastSeen) {
+			eng.LastSeen = t
+		}
+		applyEvent(eng, e)
+	}
+
+	out := make([]*Engagement, 0, len(order))
+	for _, id := range order {
+		eng := byID[id]
+		eng.EndedAt = eng.LastSeen
+		eng.RiskScore = score(eng)
+		eng.Summary = summarize(eng)
+		out = append(out, eng)
+	}
+	sortByRisk(out)
+	return out
+}
+
+// applyEvent folds one event into an engagement. Observe and FromEvents share
+// it so that a replayed engagement is identical to the live one.
+func applyEvent(eng *Engagement, e *event.Event) {
+	eng.Events++
+	if e.SeverityID > eng.MaxSeverity {
+		eng.MaxSeverity = e.SeverityID
+	}
+	addUnique(&eng.Decoys, e.Mirage.DecoyID)
+	addUnique(&eng.Services, e.Mirage.Service)
+	for _, tech := range e.Mirage.Attack {
+		if tech.Technique != "" {
+			addUnique(&eng.Techniques, tech.Technique)
+		}
+		switch tech.Tactic {
+		case "TA0008":
+			addPhase(eng, PhaseLateral)
+		case "TA0040", "TA0105", "TA0106":
+			addPhase(eng, PhaseImpact)
+		}
+	}
+
+	switch e.ClassUID {
+	case event.ClassCredentialOffer:
+		eng.Credentials++
+		addPhase(eng, PhaseCredent)
+		if v, _ := e.Get("accepted"); v == true {
+			eng.Authenticated = true
+			addPhase(eng, PhaseAccess)
+		}
+	case event.ClassAuthentication:
+		if v, ok := e.Get("accepted"); !ok || v == true {
+			eng.Authenticated = true
+			addPhase(eng, PhaseAccess)
+		}
+	case event.ClassCommandExecuted:
+		eng.Commands++
+		addPhase(eng, PhaseDiscover)
+	case event.ClassFileActivity, event.ClassTokenTriggered:
+		if tok := e.GetString("honeytoken"); tok != "" {
+			addUnique(&eng.HoneytokensHit, tok)
+			addPhase(eng, PhaseCredent)
+		}
+		if tok := e.GetString("token_label"); tok != "" {
+			addUnique(&eng.HoneytokensHit, tok)
+			addPhase(eng, PhaseCredent)
+		}
+	case event.ClassDetectionFinding:
+		if u := e.GetString("url"); u != "" {
+			addUnique(&eng.PayloadURLs, u)
+		}
+	}
 }

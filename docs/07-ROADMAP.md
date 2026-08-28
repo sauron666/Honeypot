@@ -9,8 +9,11 @@
 
 ---
 
-> **Състояние към 2026-08-28:** фаза 0 е завършена; от фаза 1 са готови
-> персоните, шест протокола, sink драйверите, конзолата и профил P0.
+> **Състояние към 2026-08-28:** фаза 0 е завършена. От фаза 1 са готови
+> персоните, дванадесет протокола (вкл. UDP и ICS), multi-IP projection,
+> honeytokens, sink драйверите, конзолата и профил P0. От фаза 5 е готов
+> `mirage-forge` — изтеглен напред, защото е основното продуктово твърдение
+> и не зависи от нищо друго.
 
 ## Фаза 0 — Гръбнак и абстракции  (3–4 седмици) — ✅ ЗАВЪРШЕНА
 **Цел:** едно събитие от край до край + правилните шевове от първия ден.
@@ -35,11 +38,12 @@
 ## Фаза 1 — MVP: широчина + внедримост  (8–10 седмици)
 **Цел:** продукт, който непознат човек може да инсталира и от който има полза за час.
 
-- [~] `mirage-honeyd`: 6 протокола (ssh, http, telnet, ftp, redis, generic) с per-deploy рандомизация; остават SMB, RDP, MySQL/MSSQL, VNC, SNMP, OT и multi-IP projection
+- [x] `mirage-honeyd`: 12 протокола (ssh, http, telnet, ftp, redis, mysql, mssql, vnc, smtp, snmp, modbus, generic) с per-deploy рандомизация
+- [x] Multi-IP projection (`addresses:` на примамка)
 - [~] **Персони** — три Linux персони с виртуална ФС, подхвърлени тайни и
       стабилен per-deployment seed; остават Deception Packs, i18n и още 12 персони
 - [ ] **Deception-as-Code**: `miragectl plan/apply/destroy` + drift detection
-- [ ] `mirage-tokens`: 10 типа + callback receiver + minting API
+- [x] `mirage-tokens`: 8 типа + callback receiver + watcher + minting API + .docx генератор
 - [ ] `mirage-gateway` v1: `sinkhole`, kill switch, всички hard-coded предпазители
 - [ ] `ComputeDriver: proxmox`, `FabricDriver: opnsense` (втори драйвер за реалност)
 - [~] Sinks: stdout, file, webhook, syslog RFC5424; остават ECS/Elastic, Splunk HEC, чат
@@ -111,7 +115,7 @@
 ## Фаза 5 — Интелект и продуктизация  (10–12 седмици)
 - [ ] `mirage-brain`: session stitching, ATT&CK auto-mapping, actor clustering,
       **Attacker Toolkit DB** + предсказване на следваща стъпка
-- [ ] `mirage-forge`: авто-Sigma/YARA/Suricata + валидация + push към SIEM
+- [x] `mirage-forge`: авто-Sigma/YARA/Suricata/STIX + инцидентен доклад (готов; остава push към SIEM)
 - [ ] `mirage-vault`: hash chain, RFC3161, подписан evidence package
 - [ ] Локален LLM аналитик (офлайн, извън решаващия път)
 - [ ] `mirage-comply` — NIS2/DORA/ISO/PCI/SOC2/IEC 62443 доказателствен пакет

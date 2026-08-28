@@ -211,3 +211,68 @@ func TestConcurrentResolveAndObserve(t *testing.T) {
 		t.Fatalf("commands = %d, want 400", act[0].Commands)
 	}
 }
+
+func TestFromEventsRebuildsTheSameStoryAsTheLiveTracker(t *testing.T) {
+	// An analyst opening last month's incident from the evidence file must see
+	// exactly what the live console showed at the time.
+	tr := NewTracker(Options{IdleTimeout: time.Hour})
+	id := tr.Resolve("198.51.100.7", "dcy-web01", "ssh")
+
+	var recorded []*event.Event
+	record := func(e *event.Event) {
+		recorded = append(recorded, e)
+		tr.Observe(e)
+	}
+
+	cred := ev(event.ClassCredentialOffer, "198.51.100.7", id, "dcy-web01", "ssh", event.SeverityHigh)
+	cred.Set("accepted", true)
+	record(cred)
+
+	for i := 0; i < 4; i++ {
+		c := ev(event.ClassCommandExecuted, "198.51.100.7", id, "dcy-web01", "ssh", event.SeverityMedium)
+		c.WithAttack(event.Technique{Tactic: "TA0007", Technique: "T1082"})
+		record(c)
+	}
+	tok := ev(event.ClassFileActivity, "198.51.100.7", id, "dcy-web01", "ssh", event.SeverityCritical)
+	tok.Set("honeytoken", "app-db-credential")
+	record(tok)
+
+	find := ev(event.ClassDetectionFinding, "198.51.100.7", id, "dcy-db01", "redis", event.SeverityCritical)
+	find.Set("url", "http://198.51.100.66/x.sh")
+	record(find)
+
+	live, _ := tr.Get(id)
+	replayed := FromEvents(recorded)
+	if len(replayed) != 1 {
+		t.Fatalf("replay produced %d engagements", len(replayed))
+	}
+	r := replayed[0]
+
+	if r.ID != live.ID || r.SrcIP != live.SrcIP {
+		t.Fatalf("identity differs: %s/%s vs %s/%s", r.ID, r.SrcIP, live.ID, live.SrcIP)
+	}
+	if r.Events != live.Events || r.Commands != live.Commands || r.Credentials != live.Credentials {
+		t.Fatalf("counters differ: replay %+v vs live %+v", r, live)
+	}
+	if r.Authenticated != live.Authenticated || r.RiskScore != live.RiskScore {
+		t.Fatalf("risk differs: replay %d/%v vs live %d/%v",
+			r.RiskScore, r.Authenticated, live.RiskScore, live.Authenticated)
+	}
+	if r.Summary != live.Summary {
+		t.Fatalf("summary differs:\n replay: %s\n live:   %s", r.Summary, live.Summary)
+	}
+	if len(r.Techniques) != len(live.Techniques) || len(r.Decoys) != len(live.Decoys) {
+		t.Fatalf("techniques/decoys differ: %v/%v vs %v/%v",
+			r.Techniques, r.Decoys, live.Techniques, live.Decoys)
+	}
+	if len(r.HoneytokensHit) != 1 || len(r.PayloadURLs) != 1 {
+		t.Fatalf("replay lost artifacts: %+v", r)
+	}
+}
+
+func TestFromEventsIgnoresEventsWithoutAnEngagement(t *testing.T) {
+	orphan := event.New(event.ClassDecoyInteraction, 1, event.SeverityLow, event.PlaneHoneyd)
+	if got := FromEvents([]*event.Event{orphan}); len(got) != 0 {
+		t.Fatalf("got %d engagements from an orphan event", len(got))
+	}
+}

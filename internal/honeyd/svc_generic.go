@@ -2,6 +2,7 @@ package honeyd
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"net"
 	"strings"
@@ -62,9 +63,11 @@ func (g *genericSvc) Serve(ctx context.Context, conn net.Conn, s *Session) error
 
 			e := s.Event(event.ClassDecoyInteraction, 1, event.SeverityMedium).
 				WithMessage("payload on %s/%d (%d bytes)", g.svcName, s.LocalPort(), n)
+			sum := sha256.Sum256(chunk)
 			e.Set("bytes", n).
 				Set("payload_ascii", printableOnly(chunk)).
-				Set("payload_hex", hex.EncodeToString(chunk[:min(n, 512)]))
+				Set("payload_hex", hex.EncodeToString(chunk[:min(n, 512)])).
+				Set("sha256", hex.EncodeToString(sum[:]))
 			s.Emit(e)
 		}
 		if err != nil {

@@ -74,7 +74,15 @@ NAS) на девет порта. Всяко докосване се записв
 curl http://127.0.0.1:8080/.env                       # scanner path
 ssh -p 2222 root@127.0.0.1                            # паролата "toor" минава
 redis-cli -p 6380 CONFIG SET dir /var/spool/cron      # класическата Redis верига
+mysql -h 127.0.0.1 -P 3307 -u dba -pdba123            # подхвърлената парола минава
 ./bin/miragectl verify --file data/evidence.jsonl     # доказателствата непокътнати?
+```
+
+И най-важното — примамката пише детекциите за реалната мрежа:
+
+```bash
+./bin/miragectl forge --file data/evidence.jsonl --out ./detections
+# report.md, sigma-*.yml, suricata-*.rules, captured-*.yar, stix-*.json, iocs-*.tsv
 ```
 
 ## Какво работи днес
@@ -87,22 +95,24 @@ redis-cli -p 6380 CONFIG SET dir /var/spool/cron      # класическата
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
 | `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424) |
-| `internal/honeyd` | **ssh** (истински протокол), **http**, **telnet**, **ftp**, **redis**, **generic** |
+| `internal/honeyd` | 12 протокола: **ssh** (истински), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **generic** |
 | `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup` с виртуална ФС и подхвърлени тайни |
-| `internal/engagement` | стичване на събития в една история + risk score |
+| `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
+| `internal/forge` | **автогенериране на Sigma / Suricata / YARA / STIX + инцидентен доклад** |
+| `internal/engagement` | стичване на събития в една история + risk score; възстановяване от evidence файл |
 | `internal/alert` | праг по severity, дедупликация, линк към engagement |
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
-| `cmd/miragectl` | doctor, personas, services, drivers, verify, events, status |
+| `cmd/miragectl` | doctor, personas, services, drivers, verify, events, tokens, **forge**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
 (`test/e2e`), всичко под `-race`.
 
 ## Какво НЕ работи още
 
-Няма VMI observer, няма пълни VM примамки, няма identity/AD deception, няма
-ransomware engine, няма Life Engine, няма overlay режим. Пътната карта и редът
-на изпълнение: `docs/07-ROADMAP.md`.
+Няма VMI observer, няма пълни VM примамки, няма SMB, няма identity/AD deception,
+няма ransomware engine, няма Life Engine (синтетични потребители), няма overlay
+режим. Пътната карта и редът на изпълнение: `docs/07-ROADMAP.md`.
 
 ## Статус
 
-**Фаза 0 завършена, фаза 1 в ход.** Продуктът е използваем днес в профил P0.
+**Фаза 0 завършена, фаза 1 почти завършена.** Продуктът е използваем днес в профил P0.

@@ -3,6 +3,8 @@ package honeyd
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
@@ -323,10 +325,14 @@ func (f *ftpSvc) receiveData(ctx context.Context, st *ftpState, s *Session,
 	e := s.Event(event.ClassFileActivity, 1, event.SeverityCritical).
 		WithMessage("FTP upload captured: %s (%d bytes)", path, len(buf)).
 		WithAttack(event.Technique{Tactic: "TA0011", Technique: "T1105", Name: "Ingress Tool Transfer"})
+	sum := sha256.Sum256(buf)
 	e.Set("file_path", path).
 		Set("file_size", len(buf)).
 		Set("payload_preview", printableOnly(buf[:min(len(buf), 4096)])).
-		Set("payload_kind", sniffPayload(buf))
+		Set("payload_kind", sniffPayload(buf)).
+		// The hash is what makes a captured upload usable elsewhere: an EDR
+		// block list, a YARA rule, a threat intel bundle.
+		Set("sha256", hex.EncodeToString(sum[:]))
 	s.Emit(e)
 	return reply("226 Transfer complete.")
 }
