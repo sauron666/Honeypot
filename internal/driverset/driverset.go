@@ -7,6 +7,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/drivers/compute"
 	"github.com/sauron666/Honeypot/internal/drivers/fabric"
+	"github.com/sauron666/Honeypot/internal/drivers/nac"
 	"github.com/sauron666/Honeypot/internal/drivers/observer"
 	"github.com/sauron666/Honeypot/internal/drivers/sink"
 )
@@ -34,6 +35,9 @@ func Default() *drivers.Registry {
 	// none is the honest choice for a deployment with no hypervisor.
 	r.Register(observer.NoneInfo(), observer.NewNone)
 	r.Register(observer.DrakvufInfo(), observer.NewDrakvuf)
+
+	// NAC: steering unknown devices into the honeynet.
+	r.Register(nac.RadiusInfo(), nac.NewRadius)
 
 	// Sinks.
 	r.Register(sink.StdoutInfo(), sink.NewStdout)

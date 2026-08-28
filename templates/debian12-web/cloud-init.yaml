@@ -1,0 +1,51 @@
+#cloud-config
+# MIRAGE cloud-init for Debian 12 web server decoy.
+#
+# Applied when the decoy VM boots from a cloned template. It gives each clone
+# a unique identity: hostname, SSH host keys, machine-id, and the user accounts
+# the persona declares. The template is generic; the deployment makes it specific.
+
+hostname: ${hostname}
+fqdn: ${hostname}.${domain}
+manage_etc_hosts: true
+
+# Regenerate SSH host keys so each clone has its own.
+ssh_deletekeys: true
+ssh_genkeytypes: [rsa, ecdsa, ed25519]
+
+# Set the timezone to match the persona's geography.
+timezone: ${timezone}
+
+# Packages the persona needs but the template may not have.
+packages:
+  - nginx
+  - php-fpm
+  - openssh-server
+  - rsyslog
+  - cron
+  - curl
+
+users:
+  - name: deploy
+    gecos: "Deployment user"
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    passwd: ${deploy_password_hash}
+
+  - name: backup
+    gecos: "Backup agent"
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: ${backup_password_hash}
+
+runcmd:
+  - systemctl restart ssh
+  - systemctl restart nginx
+  # Populate shell history to look lived-in (the Life Engine takes over at runtime)
+  - echo "systemctl status nginx" >> /home/deploy/.bash_history
+  - echo "tail -f /var/log/nginx/error.log" >> /home/deploy/.bash_history
+  - echo "cd /var/www/html && git pull" >> /home/deploy/.bash_history
+  - chown deploy:deploy /home/deploy/.bash_history
+
+final_message: "MIRAGE decoy ready: $HOSTNAME"
