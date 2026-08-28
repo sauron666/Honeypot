@@ -109,6 +109,12 @@ honeyd:
           port: 389
         - service: smb
           port: 445
+        - service: kerberos
+          port: 88
+          protocol: tcp
+        - service: kerberos
+          port: 88
+          protocol: udp
 
     - id: dcy-db01
       persona: linux/db

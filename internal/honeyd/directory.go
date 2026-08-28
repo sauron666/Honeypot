@@ -1,6 +1,7 @@
 package honeyd
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
@@ -48,6 +49,61 @@ type Directory struct {
 	NetBIOS    string
 	DCHostname string
 	Entries    []*Entry
+	// Accounts is the same population seen from Kerberos rather than from LDAP.
+	//
+	// One list, built once, because the two views have to agree: an attacker
+	// who enumerates svc_sql over LDAP and then cannot roast it over Kerberos
+	// has found the seam. Everything the KDC needs -- whether pre-auth is off,
+	// which SPN the account carries, and the password the bait is planted with
+	// -- lives here.
+	Accounts []*KerbAccount
+}
+
+// KerbAccount is one principal the decoy KDC will answer for.
+type KerbAccount struct {
+	// SAM is the sAMAccountName, which is what an attacker types.
+	SAM string
+	// SPN, when set, makes the account kerberoastable: any authenticated
+	// principal may ask for a ticket to it, and that ticket is encrypted with
+	// this account's key.
+	SPN string
+	// NoPreauth mirrors DONT_REQ_PREAUTH. Such an account hands out a
+	// crackable AS-REP to anyone who asks, without a password, which is the
+	// whole of AS-REP roasting.
+	NoPreauth bool
+	// Password is what the planted bait actually cracks to. It is a real
+	// password for an account that does not exist, so an attacker who cracks
+	// it and then tries it anywhere in the deployment walks straight into the
+	// honeytoken watcher.
+	Password string
+	// Machine marks a computer account, which never appears in a spray.
+	Machine bool
+}
+
+// Account finds a principal by sAMAccountName, case-insensitively, because
+// Kerberos names are compared that way in practice and an attacker typing
+// SVC_SQL expects it to work.
+func (d *Directory) Account(sam string) (*KerbAccount, bool) {
+	sam = strings.TrimSpace(sam)
+	if i := strings.IndexByte(sam, '@'); i > 0 {
+		sam = sam[:i] // a userPrincipalName was given
+	}
+	for _, a := range d.Accounts {
+		if strings.EqualFold(a.SAM, sam) {
+			return a, true
+		}
+	}
+	return nil, false
+}
+
+// AccountBySPN finds the account that owns a service principal name.
+func (d *Directory) AccountBySPN(spn string) (*KerbAccount, bool) {
+	for _, a := range d.Accounts {
+		if a.SPN != "" && strings.EqualFold(a.SPN, spn) {
+			return a, true
+		}
+	}
+	return nil, false
 }
 
 // Find returns entries at or below base whose attributes satisfy match.
@@ -149,6 +205,13 @@ func buildHoneyDirectory(p *Persona) *Directory {
 		{"Ivan Kolev", "i.kolev", "Service Desk", "IT"},
 	}
 	for _, u := range people {
+		// Ordinary users exist in Kerberos too, or a spray would find nothing
+		// and the attacker would conclude the KDC is fake. Their passwords are
+		// planted the same way, but pre-authentication is on, so the only way
+		// to learn one is to guess it -- and every guess is recorded.
+		d.Accounts = append(d.Accounts, &KerbAccount{
+			SAM: u.sam, Password: plantedPassword(p, u.sam),
+		})
 		dn := fmt.Sprintf("CN=%s,OU=Users,%s", u.cn, base)
 		add(dn, "", map[string][]string{
 			"objectClass":        {"top", "person", "organizationalPerson", "user"},
@@ -178,6 +241,9 @@ func buildHoneyDirectory(p *Persona) *Directory {
 		{"svc_iis", "svc_iis", "HTTP/intranet." + domain, "IIS application pool"},
 	}
 	for _, u := range roastable {
+		d.Accounts = append(d.Accounts, &KerbAccount{
+			SAM: u.sam, SPN: u.spn, Password: plantedPassword(p, u.sam),
+		})
 		dn := fmt.Sprintf("CN=%s,OU=Service Accounts,%s", u.cn, base)
 		add(dn, "kerberoastable-spn", map[string][]string{
 			"objectClass":          {"top", "person", "organizationalPerson", "user"},
@@ -201,6 +267,9 @@ func buildHoneyDirectory(p *Persona) *Directory {
 	// Kerberos pre-authentication disabled means anyone can ask the KDC for an
 	// AS-REP for this account and crack it offline. There is no operational
 	// reason to look for such accounts other than to do exactly that.
+	d.Accounts = append(d.Accounts, &KerbAccount{
+		SAM: "svc_legacy", NoPreauth: true, Password: plantedPassword(p, "svc_legacy"),
+	})
 	asrepDN := "CN=svc_legacy,OU=Service Accounts," + base
 	add(asrepDN, "asrep-roastable", map[string][]string{
 		"objectClass":        {"top", "person", "organizationalPerson", "user"},
@@ -296,4 +365,38 @@ func buildHoneyDirectory(p *Persona) *Directory {
 	})
 
 	return d
+}
+
+// plantedPassword mints the password a piece of Kerberos bait cracks to.
+//
+// It has to be crackable. A blob whose password is a random 32-character string
+// would survive every wordlist, and an attacker whose hashcat run comes back
+// empty on a "neglected service account with RC4 only and a password unchanged
+// for four years" has learnt something true about the account: it is not real.
+// So the shape is the shape of a password people actually choose, and the
+// wordlist finds it in seconds.
+//
+// What it unlocks is nothing. The value of the crack to us is the reuse: the
+// attacker takes it to SSH, SMB or MSSQL somewhere in the deployment, and the
+// honeytoken watcher joins the offline crack to the online attempt.
+func plantedPassword(p *Persona, account string) string {
+	words := []string{"Summer", "Winter", "Autumn", "Spring", "Welcome", "Password", "Backup", "Service"}
+	suffix := []string{"!", "1!", "123", "#1", "2019!", "2020!", "$", "01!"}
+	key := p.Seed + "|" + p.Domain + "|" + account
+	w := words[int(stableByte(key, 0))%len(words)]
+	n := 2015 + int(stableByte(key, 1))%10
+	sfx := suffix[int(stableByte(key, 2))%len(suffix)]
+	return fmt.Sprintf("%s%d%s", w, n, sfx)
+}
+
+// stableByte derives a byte from a key and an index. It hashes the deployment
+// seed with the account name rather than drawing from the persona RNG, for two
+// reasons: the password for svc_sql must not change when an unrelated entry is
+// added above it in the directory -- an attacker who roasts the same account
+// twice and gets a different answer has been told the decoy regenerates -- and
+// two installations must never plant the same password, or the bait itself
+// becomes a signature that identifies MIRAGE.
+func stableByte(s string, i int) byte {
+	sum := sha256.Sum256([]byte("mirage-krb|" + s))
+	return sum[i%len(sum)]
 }

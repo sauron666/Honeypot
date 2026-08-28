@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,7 +86,14 @@ func listenerKey(lc ListenerConfig, bindAddr string) string {
 	if host == "" {
 		host = bindAddr
 	}
-	return fmt.Sprintf("%s/%s:%d", lc.Service, host, lc.Port)
+	proto := strings.ToLower(lc.Protocol)
+	if proto == "" {
+		proto = "-"
+	}
+	// The protocol is part of the identity: Kerberos on udp/88 and Kerberos on
+	// tcp/88 are two listeners, and a key that ignored the difference would
+	// make reconcile tear one down to build the other, forever.
+	return fmt.Sprintf("%s/%s/%s:%d", lc.Service, proto, host, lc.Port)
 }
 
 // sameListener reports whether two configurations describe the same decoy on
@@ -98,7 +106,8 @@ func listenerKey(lc ListenerConfig, bindAddr string) string {
 // endpoints on every apply.
 func sameListener(a, b ListenerConfig) bool {
 	return a.Service == b.Service && a.Address == b.Address && a.Port == b.Port &&
-		a.Persona == b.Persona && a.DecoyID == b.DecoyID
+		a.Persona == b.Persona && a.DecoyID == b.DecoyID &&
+		strings.EqualFold(a.Protocol, b.Protocol)
 }
 
 // BoundListener describes a listening decoy endpoint.
@@ -123,12 +132,34 @@ type EngagementResolver interface {
 // same decoy, or different decoys, on every unused address in a subnet. Leave
 // it empty to use the farm's default bind address.
 type ListenerConfig struct {
-	Service string         `yaml:"service" json:"service"`
-	Address string         `yaml:"address" json:"address"`
-	Port    int            `yaml:"port" json:"port"`
-	Persona string         `yaml:"persona" json:"persona"`
-	DecoyID string         `yaml:"decoy_id" json:"decoy_id"`
-	Options map[string]any `yaml:"options" json:"options"`
+	Service string `yaml:"service" json:"service"`
+	Address string `yaml:"address" json:"address"`
+	Port    int    `yaml:"port" json:"port"`
+	Persona string `yaml:"persona" json:"persona"`
+	DecoyID string `yaml:"decoy_id" json:"decoy_id"`
+	// Protocol is "tcp" or "udp". Empty means the service's natural transport:
+	// UDP for a PacketService, TCP for everything else.
+	//
+	// It exists because some protocols are genuinely both. Kerberos is the
+	// clearest case: clients try UDP first and fall back to TCP when the reply
+	// will not fit, and a decoy KDC that bound only one of them would be
+	// missing exactly the half the attacker's tool happened to use.
+	Protocol string         `yaml:"protocol" json:"protocol,omitempty"`
+	Options  map[string]any `yaml:"options" json:"options"`
+}
+
+// transportOf resolves the transport a listener should be bound on.
+func transportOf(lc ListenerConfig, svc Service) string {
+	switch strings.ToLower(lc.Protocol) {
+	case "udp":
+		return "udp"
+	case "tcp":
+		return "tcp"
+	}
+	if _, ok := svc.(PacketService); ok {
+		return "udp"
+	}
+	return "tcp"
 }
 
 // Config configures the service farm.
@@ -388,7 +419,12 @@ func (s *Server) startListener(ctx context.Context, lc ListenerConfig) error {
 	}
 	addr := net.JoinHostPort(bindHost, fmt.Sprint(lc.Port))
 
-	if ps, ok := svc.(PacketService); ok {
+	if transportOf(lc, svc) == "udp" {
+		ps, ok := svc.(PacketService)
+		if !ok {
+			return fmt.Errorf("honeyd: %s was asked for udp but does not speak datagrams",
+				lc.Service)
+		}
 		pc, err := net.ListenPacket("udp", addr)
 		if err != nil {
 			return fmt.Errorf("honeyd: listen udp %s for %s: %w", addr, lc.Service, err)

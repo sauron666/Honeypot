@@ -98,6 +98,23 @@ Deception-as-Code — виж какво ще се промени, преди д�
 публикува число. `fingerprint` дава число за всяка примамка, конкретното нещо,
 което я издава, и какво да се направи по въпроса.
 
+Истински KDC. LDAP примамката вижда, че някой *търси* roastable акаунти;
+KDC-то вижда как отива и ги *взема* — а много инструменти прескачат LDAP
+(kerbrute, Rubeus с списък имена, `GetNPUsers -usersfile`). Три неща, които
+LDAP-само наблюдение не дава:
+
+- **Изброяване на потребители** — KDC отговаря различно на съществуващ и на
+  несъществуващ принципал, всеки опитан е записан по ред; това е речникът на
+  атакуващия, който често го издава по-добре от IP-то.
+- **Password spray** — pre-authentication носи криптиран timestamp; KDC-то го
+  дешифрира, така че грешна парола се различава от малформиран пакет, а една
+  парола срещу двайсет акаунта — от двайсет пароли срещу един.
+- **Roast, който наистина се чупи** — раздаденият blob е истински RC4-HMAC над
+  истински DER, с NT hash на планирана парола; hashcat (режими 18200/13100) я
+  намира. Паролата отключва нищо — но watcher-ът я чака навсякъде другаде, така
+  че в мига, в който атакуващият я пробва по SSH/SMB/MSSQL, офлайн кракът се
+  свързва с онлайн опита в един engagement.
+
 Overlay режим — примамки в чужд сегмент без нито една промяна по мрежата.
 Агентът поема свободни адреси там, където е, и тунелира всичко до хъба; VLAN,
 маршрути и firewall правила остават каквито са. Тунелът е с **взаимен TLS**,
@@ -159,7 +176,7 @@ baseline, но първо снимка на мръсното състояние 
 | `internal/drivers/fabric` | `nftables` (налага и проверява), `probe` (проверява реалността, не правилата) |
 | `internal/farm` | **пълни VM примамки**: provisioner, baseline snapshot, reset след engagement, **burn** (запазва компрометираната машина като доказателство) |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424), `elastic`, `splunk` |
-| `internal/honeyd` | 15 протокола: **ssh** (истински), **ldap** (фалшив AD), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
+| `internal/honeyd` | 16 протокола: **ssh** (истински), **ldap** (фалшив AD), **kerberos** (истински KDC: AS-REP/kerberoast с crackable hash), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
 | `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран дял с canary файлове), `windows/dc` (фалшива AD с kerberoast/AS-REP/ADCS/LAPS примамки) |
 | `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
 | `internal/forge` | **автогенериране на Sigma / Suricata / YARA / STIX + инцидентен доклад** |
@@ -177,9 +194,7 @@ baseline, но първо снимка на мръсното състояние 
 
 ## Какво НЕ работи още
 
-Няма VMI observer. Няма Kerberos KDC (AS-REP и kerberoast се засичат при
-изброяването през LDAP, не при самото искане на тикет). Няма Life Engine
-(синтетични потребители).
+Няма VMI observer. Няма Life Engine (синтетични потребители).
 
 Пълните VM примамки са реализирани откъм платформата — provisioner, containment
 gate, baseline, reset, burn — но **самите образи не се доставят**. Профил P4

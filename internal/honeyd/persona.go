@@ -47,6 +47,11 @@ type Persona struct {
 	// inside where we can watch it. Zero disables.
 	AcceptAfter int
 
+	// Seed is the deployment seed this persona was built from. Content derived
+	// from it is stable across restarts and different between installations,
+	// so nothing MIRAGE plants can be signatured across customers.
+	Seed string
+
 	rnd *rand.Rand
 }
 

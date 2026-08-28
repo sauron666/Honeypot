@@ -112,9 +112,13 @@ type DecoyConfig struct {
 
 // ServiceConfig is one listening port on a decoy.
 type ServiceConfig struct {
-	Service string         `yaml:"service"`
-	Port    int            `yaml:"port"`
-	Options map[string]any `yaml:"options"`
+	Service string `yaml:"service"`
+	Port    int    `yaml:"port"`
+	// Protocol is "tcp" or "udp"; empty means the service's natural transport.
+	// Kerberos is the reason it exists: clients try UDP and fall back to TCP,
+	// so a decoy KDC is declared twice on port 88, once for each.
+	Protocol string         `yaml:"protocol"`
+	Options  map[string]any `yaml:"options"`
 }
 
 // EngagementConfig configures how interactions are stitched together.
@@ -303,8 +307,18 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: decoy %q service %q: port %d is out of range",
 					d.ID, s.Service, s.Port)
 			}
+			switch strings.ToLower(s.Protocol) {
+			case "", "tcp", "udp":
+			default:
+				return fmt.Errorf("config: decoy %q service %q: protocol %q is not tcp or udp",
+					d.ID, s.Service, s.Protocol)
+			}
 			for _, a := range addressesOf(d, c.Honeyd.Bind) {
-				bind := net.JoinHostPort(a, strconv.Itoa(s.Port))
+				proto := s.Protocol
+				if proto == "" {
+					proto = "-"
+				}
+				bind := proto + "/" + net.JoinHostPort(a, strconv.Itoa(s.Port))
 				if owner, dup := seenBind[bind]; dup {
 					return fmt.Errorf("config: %s is claimed by both %q and %q",
 						bind, owner, d.ID+"/"+s.Service)
@@ -482,7 +496,7 @@ func (c *Config) Listeners() []honeyd.ListenerConfig {
 			for _, s := range d.Services {
 				lc := honeyd.ListenerConfig{
 					Service: s.Service, Port: s.Port, Persona: d.Persona,
-					DecoyID: d.ID, Options: s.Options,
+					DecoyID: d.ID, Protocol: s.Protocol, Options: s.Options,
 				}
 				// Only pin the address when the decoy asked for specific ones;
 				// otherwise the farm's bind address applies.

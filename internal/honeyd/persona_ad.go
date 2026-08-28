@@ -18,6 +18,7 @@ func init() { RegisterPersona("windows/dc", buildWindowsDC) }
 // answers LDAP and SMB, which is where the interesting questions get asked.
 func buildWindowsDC(seed string) *Persona {
 	p := &Persona{
+		Seed:         seed,
 		Name:         "windows/dc",
 		Vertical:     "generic",
 		Language:     "en",

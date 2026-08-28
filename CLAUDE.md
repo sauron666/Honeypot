@@ -52,11 +52,12 @@ make build
 
 ### Протоколи (`internal/honeyd/svc_*.go`)
 
-`ssh` (истински, x/crypto), `ldap` (фалшива AD), `smb` (NetNTLMv2 улов),
-`http`, `telnet`, `ftp` (+ransomware engine), `redis`, `mysql` (верифицира
-подхвърлена парола от скрамбъла), `mssql` (възстановява паролата в чист текст),
-`vnc`, `smtp`, `snmp` (UDP), `modbus` (ICS), `tokens` (callback приемник),
-`generic`.
+`ssh` (истински, x/crypto), `ldap` (фалшива AD), `kerberos` (истински KDC:
+enumeration, spraying, AS-REP roast и kerberoast с crackable RC4-HMAC hash),
+`smb` (NetNTLMv2 улов), `http`, `telnet`, `ftp` (+ransomware engine), `redis`,
+`mysql` (верифицира подхвърлена парола от скрамбъла), `mssql` (възстановява
+паролата в чист текст), `vnc`, `smtp`, `snmp` (UDP), `modbus` (ICS), `tokens`
+(callback приемник), `generic`.
 
 ### Персони (`internal/honeyd/persona_*.go`)
 
@@ -128,6 +129,19 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
   иначе всеки reset струва видимо буутване.
 - **Reset става само след затворен engagement**, не по таймер. Рестарт, докато
   атакуващият е вътре, е най-очевидният tell, който изобщо може да се даде.
+- **Kerberos е и TCP, и UDP на порт 88.** Клиентите пробват UDP и падат към TCP,
+  когато отговорът не се събира. `ListenerConfig.Protocol` избира транспорта;
+  KDC-то се декларира два пъти на 88. По UDP всеки съществен отговор е
+  `KRB5KRB_ERR_RESPONSE_TOO_BIG` (без e-text — иначе е amplification), което е
+  и каквото истински KDC връща.
+- **Планираните пароли трябва да са crackable.** AS-REP/TGS blob-овете са
+  истински RC4-HMAC над истински DER, с NT hash на планирана парола с формата,
+  който хората избират. Ако паролата е случайна, hashcat не я намира и
+  атакуващият разбира, че акаунтът е фалшив. Стойността е в reuse-а: watcher-ът
+  свързва офлайн крака с онлайн опита.
+- **Един каталог, два изгледа.** LDAP и Kerberos четат от `buildHoneyDirectory`;
+  ако svc_sql се вижда по LDAP, но не се roast-ва по Kerberos, атакуващият е
+  намерил шева. `TestKerberosBaitAgreesWithWhatLDAPAdvertises` го пази.
 - **TLS ръкостискането се прави явно в `serveAgent`.** Оставено на първия
   `Read`, проблем със сертификат излиза като „връзката не започна с hello",
   което праща човека, който вдига mTLS, точно в грешната посока.
@@ -157,10 +171,7 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
 1. **Образи за VM примамките** — платформата е готова (`internal/farm`,
    профил P4), но MIRAGE клонира готови libvirt шаблони, не ги строи.
    Липсва packer/cloud-init рецепта и `proxmox` драйвер.
-2. **Kerberos KDC** — сега AS-REP/kerberoast се засичат при изброяването през
-   LDAP, не при самото искане на тикет. Истински KDC дава crackable AS-REP и
-   TGS отговори.
-3. **Life Engine** — синтетични потребители, които поддържат примамката жива
+2. **Life Engine** — синтетични потребители, които поддържат примамката жива
    (логове, lastLogon, нови файлове) докато атакуващият я гледа.
 4. **SMB файлови операции** — за да работи ransomware двигателят и срещу
    Windows криптори. Изисква валидация срещу истински Windows клиент.

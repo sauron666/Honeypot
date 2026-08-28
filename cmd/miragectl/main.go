@@ -232,10 +232,12 @@ func listServices() error {
 		"vnc":     "RFB with VNC auth; records the DES challenge and response",
 		"smtp":    "mail server that never delivers; captures credentials and open-relay probes",
 		"snmp":    "SNMP v1/v2c over UDP; records community strings, never amplifies",
-		"modbus":  "Modbus/TCP PLC; reads are recon, writes are treated as process manipulation",
-		"smb":     "SMB2 negotiation and NTLM; captures NetNTLMv2 hashes and the attacker's workstation name",
-		"ldap":    "decoy Active Directory; cleartext bind passwords, kerberoast/AS-REP/ADCS/LAPS enumeration",
-		"tokens":  "honeytoken callback receiver; must be reachable by whoever found the token",
+		"kerberos": "decoy KDC; sees enumeration, spraying and roasting as ticket requests, " +
+			"and hands out hashes that crack to a watched password",
+		"modbus": "Modbus/TCP PLC; reads are recon, writes are treated as process manipulation",
+		"smb":    "SMB2 negotiation and NTLM; captures NetNTLMv2 hashes and the attacker's workstation name",
+		"ldap":   "decoy Active Directory; cleartext bind passwords, kerberoast/AS-REP/ADCS/LAPS enumeration",
+		"tokens": "honeytoken callback receiver; must be reachable by whoever found the token",
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SERVICE\tDESCRIPTION")

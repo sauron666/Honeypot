@@ -101,6 +101,17 @@ honeyd:
           port: 3389
         - service: smb
           port: 4446
+        # A real KDC. LDAP shows an attacker which accounts are roastable; this
+        # is where they go and take them, and plenty of tooling (kerbrute,
+        # Rubeus with a name list, GetNPUsers -usersfile) skips LDAP entirely.
+        # Declared twice because clients try UDP first and fall back to TCP;
+        # redirect 88 here at the firewall.
+        - service: kerberos
+          port: 8888
+          protocol: tcp
+        - service: kerberos
+          port: 8888
+          protocol: udp
 
     # An industrial decoy. A PLC cannot run an agent, which makes a passive
     # decoy the only detection some plants can have at all.
