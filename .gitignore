@@ -24,3 +24,4 @@ presence-pki/
 *.key
 *.crt
 *.pem
+/dist/
