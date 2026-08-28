@@ -50,7 +50,7 @@
 | 4/ADR-004 VMI observer (agentless) | ◐ наполовина: parsing/mapping готови, hypervisor-glue остава | `internal/drivers/observer`, `docs/adr/ADR-010` |
 | 4 Attack Path Deception (`mirage-graph`) | ✗ следващо; изисква реална среда | — |
 | 6 Just-in-Time примамки | ✗ | — |
-| 8 Attacker Toolkit DB + предсказване | ✗ | — |
+| 8 Attacker Toolkit DB + предсказване | ✅ готово (12 сигнатури) | `internal/toolkit` |
 | 9 Deception за AI агенти / MCP ★ | ◐ prompt-canary + LLM-key tokens + labyrinth | `internal/tokens/canary.go`, breadcrumbs |
 | 10 Supply-chain / DevOps deception | частично: Breadcrumbs покрива CI/endpoint следи | `internal/breadcrumbs` |
 | — SMB файлови операции (ransomware по SMB) | ✅ готово | `internal/honeyd/smb_files.go` |
