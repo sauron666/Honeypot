@@ -51,9 +51,11 @@
 | 4 Attack Path Deception (`mirage-graph`) | ✗ следващо; изисква реална среда | — |
 | 6 Just-in-Time примамки | ✗ | — |
 | 8 Attacker Toolkit DB + предсказване | ✗ | — |
-| 9 Deception за AI агенти / MCP ★ | ✗ (нова повърхност, никой не я покрива) | — |
+| 9 Deception за AI агенти / MCP ★ | ◐ prompt-canary + LLM-key tokens + labyrinth | `internal/tokens/canary.go`, breadcrumbs |
 | 10 Supply-chain / DevOps deception | частично: Breadcrumbs покрива CI/endpoint следи | `internal/breadcrumbs` |
-| 11–20 | ✗ по-нататъшни фази | — |
+| 15 Cognitive Friction (web labyrinth) | ✅ web labyrinth (infinite scanner trap) | `internal/honeyd/svc_http.go` |
+| 17 Engagement Economics | ✅ готово | `internal/engagement`, `miragectl economics` |
+| 11–20 (останалите) | ✗ по-нататъшни фази | — |
 
 ★ = диференциатор, който конкурентите нямат.
 

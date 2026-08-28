@@ -235,11 +235,14 @@ func (h *httpSvc) respond(req *http.Request, body string, s *Session) (string, b
 			status, contentType, payload = "200 OK", "text/html; charset=UTF-8", h.portalHTML("")
 		}
 	case req.URL.Path == "/robots.txt":
-		status, contentType, payload = "200 OK", "text/plain", "User-agent: *\nDisallow: /admin\nDisallow: /backup\n"
+		status, contentType, payload = "200 OK", "text/plain",
+			"User-agent: *\nDisallow: /admin\nDisallow: /backup\nSitemap: /sitemap.xml\n"
 	case req.URL.Path == "/favicon.ico":
 		status, contentType, payload = "404 Not Found", "text/html", h.notFound(req.URL.Path)
 	case req.URL.Path == "/server-status":
 		status, contentType, payload = "403 Forbidden", "text/html", h.forbidden()
+	case strings.HasPrefix(req.URL.Path, "/trap/") || strings.HasPrefix(req.URL.Path, "/sitemap"):
+		status, contentType, payload = "200 OK", "text/html; charset=UTF-8", h.labyrinth(req, s)
 	default:
 		status, contentType, payload = "404 Not Found", "text/html", h.notFound(req.URL.Path)
 	}
@@ -299,6 +302,64 @@ func (h *httpSvc) forbidden() string {
 
 // html escapes a path before reflecting it, so that our own decoy page is not
 // the XSS an attacker was looking for.
+// labyrinth generates an infinite web of internally-linked pages. Every page
+// looks like a real intranet directory listing with 10-20 plausible links, each
+// of which leads to another generated page. A web scanner that follows them
+// burns CPU and time crawling forever, and every request is recorded.
+//
+// The links are deterministic per path (seeded from the path itself), so a
+// scanner that revisits a URL sees the same page — it looks cached, not
+// generated. The content includes fake employee names, department names and
+// file paths that look worth investigating, which keeps a human attacker
+// engaged too.
+func (h *httpSvc) labyrinth(req *http.Request, s *Session) string {
+	s.Emit(s.Event(event.ClassDecoyInteraction, 1, event.SeverityMedium).
+		WithMessage("web labyrinth: scanner following generated links at %s", req.URL.Path).
+		WithAttack(event.Technique{Tactic: "TA0007", Technique: "T1083", Name: "File and Directory Discovery"}).
+		Set("labyrinth_path", req.URL.Path))
+
+	seed := crc32sum(req.URL.Path)
+	rng := seed
+
+	depts := []string{"Finance", "HR", "Engineering", "Legal", "Operations", "IT", "Sales", "Security"}
+	names := []string{"reports", "backup", "archive", "exports", "shared", "temp", "docs", "internal"}
+	exts := []string{".xlsx", ".docx", ".pdf", ".csv", ".zip", ".bak", ".sql", ".conf"}
+
+	var b strings.Builder
+	dept := depts[rng%uint32(len(depts))]
+	b.WriteString("<html><head><title>Index of " + html(req.URL.Path) + "</title></head>\n")
+	b.WriteString("<body><h1>" + dept + " - " + html(req.URL.Path) + "</h1><hr><pre>\n")
+	b.WriteString("<a href=\"../\">../</a>\n")
+
+	nLinks := 10 + int(rng>>8)%12
+	for i := 0; i < nLinks; i++ {
+		rng = rng*1103515245 + 12345
+		name := names[rng%uint32(len(names))]
+		rng = rng*1103515245 + 12345
+		if rng%3 == 0 {
+			b.WriteString(fmt.Sprintf("<a href=\"/trap/%s-%d/\">%s-%d/</a>                                     %s\n",
+				name, rng%9999, name, rng%9999, time.Now().AddDate(0, 0, -int(rng%365)).Format("02-Jan-2006 15:04")))
+		} else {
+			ext := exts[rng%uint32(len(exts))]
+			size := 1024 + rng%50000000
+			b.WriteString(fmt.Sprintf("<a href=\"/trap/%s-%d%s\">%s-%d%s</a>                              %s  %d\n",
+				name, rng%9999, ext, name, rng%9999, ext,
+				time.Now().AddDate(0, 0, -int(rng%365)).Format("02-Jan-2006 15:04"), size))
+		}
+	}
+	b.WriteString("</pre><hr></body></html>\n")
+	return b.String()
+}
+
+func crc32sum(s string) uint32 {
+	var h uint32 = 0x811c9dc5
+	for _, c := range s {
+		h ^= uint32(c)
+		h *= 0x01000193
+	}
+	return h
+}
+
 func html(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
 	return r.Replace(truncate(s, 256))

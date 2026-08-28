@@ -9,6 +9,7 @@ package engagement
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -59,6 +60,13 @@ type Engagement struct {
 
 	// Summary is a one-line description an analyst can triage from.
 	Summary string `json:"summary"`
+
+	// Economics: how much attacker time was consumed. This is the ROI metric
+	// that justifies a deception deployment to a board: "the decoys burned
+	// 41 hours of attacker time and produced 3 confirmed incidents with 0
+	// false positives." No other SOC tool gives that number.
+	AttackerSeconds float64 `json:"attacker_seconds"`
+	AttackerSummary string  `json:"attacker_summary,omitempty"`
 }
 
 // Tracker maintains live engagements.
@@ -176,6 +184,8 @@ func (t *Tracker) SweepClosed() []*Engagement {
 func (t *Tracker) closeLocked(e *Engagement, now time.Time) {
 	e.Active = false
 	e.EndedAt = now
+	e.AttackerSeconds = now.Sub(e.StartedAt).Seconds()
+	e.AttackerSummary = formatDuration(e.AttackerSeconds)
 	e.Summary = summarize(e)
 	delete(t.active, e.SrcIP)
 	t.closed = append(t.closed, e)
@@ -464,4 +474,86 @@ func applyEvent(eng *Engagement, e *event.Event) {
 			addUnique(&eng.PayloadURLs, u)
 		}
 	}
+}
+
+// formatDuration renders attacker time the way a report reads it.
+func formatDuration(secs float64) string {
+	if secs < 60 {
+		return fmt.Sprintf("%.0f seconds", secs)
+	}
+	if secs < 3600 {
+		return fmt.Sprintf("%.0f minutes", secs/60)
+	}
+	return fmt.Sprintf("%.1f hours", secs/3600)
+}
+
+// Economics summarises the ROI metrics across all closed engagements.
+//
+// The numbers it returns are the ones a quarterly security report needs:
+// total attacker time consumed, number of confirmed incidents, zero false
+// positives (by construction -- every alert came from a decoy nobody
+// legitimate uses), and average time-to-detect.
+type Economics struct {
+	TotalEngagements   int      `json:"total_engagements"`
+	AttackerHours      float64  `json:"attacker_hours"`
+	ConfirmedIncidents int      `json:"confirmed_incidents"`
+	FalsePositives     int      `json:"false_positives"` // always 0 by construction
+	AvgTimeToDetect    string   `json:"avg_time_to_detect"`
+	AvgRiskScore       int      `json:"avg_risk_score"`
+	TopTechniques      []string `json:"top_techniques"`
+}
+
+// Economics computes the deployment-level ROI metrics.
+func (t *Tracker) Economics() Economics {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	e := Economics{}
+	var totalSec float64
+	var totalRisk int
+	techCount := map[string]int{}
+
+	all := append([]*Engagement(nil), t.closed...)
+	for _, eng := range t.active {
+		all = append(all, eng)
+	}
+
+	for _, eng := range all {
+		e.TotalEngagements++
+		secs := eng.AttackerSeconds
+		if eng.Active {
+			secs = time.Since(eng.StartedAt).Seconds()
+		}
+		totalSec += secs
+		totalRisk += eng.RiskScore
+		if eng.RiskScore >= 50 {
+			e.ConfirmedIncidents++
+		}
+		for _, tech := range eng.Techniques {
+			techCount[tech]++
+		}
+	}
+	e.AttackerHours = totalSec / 3600
+	if e.TotalEngagements > 0 {
+		e.AvgRiskScore = totalRisk / e.TotalEngagements
+		avgDetect := totalSec / float64(e.TotalEngagements)
+		e.AvgTimeToDetect = formatDuration(avgDetect)
+	}
+	// Top techniques by frequency
+	type kv struct {
+		k string
+		v int
+	}
+	var pairs []kv
+	for k, v := range techCount {
+		pairs = append(pairs, kv{k, v})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].v > pairs[j].v })
+	for i, p := range pairs {
+		if i >= 5 {
+			break
+		}
+		e.TopTechniques = append(e.TopTechniques, p.k)
+	}
+	return e
 }

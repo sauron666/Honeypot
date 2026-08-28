@@ -109,6 +109,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/assure", s.runAssurance)
 	s.mux.HandleFunc("POST /api/assure/fingerprint", s.runFingerprint)
 	s.mux.HandleFunc("GET /api/presence", s.presenceAgents)
+	s.mux.HandleFunc("GET /api/economics", s.economics)
 	s.mux.HandleFunc("GET /api/vms", s.vmList)
 	s.mux.HandleFunc("POST /api/vms/{id}/burn", s.vmBurn)
 	s.mux.HandleFunc("POST /api/vms/{id}/revert", s.vmRevert)
@@ -494,6 +495,11 @@ func (s *Server) presenceAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // vmList reports the full-OS decoys.
+func (s *Server) economics(w http.ResponseWriter, r *http.Request) {
+	econ := s.deps.Tracker.Economics()
+	writeJSON(w, http.StatusOK, econ)
+}
+
 func (s *Server) vmList(w http.ResponseWriter, r *http.Request) {
 	if s.deps.VMs == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "decoys": []any{}})

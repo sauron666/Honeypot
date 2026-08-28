@@ -26,20 +26,23 @@ import (
 type Type string
 
 const (
-	TypeURL        Type = "url"           // a canary URL, fetched by whoever found it
-	TypeWebImage   Type = "web-image"     // a remote image to embed in a document
-	TypeOfficeDoc  Type = "office-doc"    // a .docx that phones home when opened
-	TypeAWSKey     Type = "aws-key"       // AWS access key pair
-	TypeAPIToken   Type = "api-token"     // generic bearer token
-	TypeDBString   Type = "db-connection" // database connection string
-	TypeSSHKey     Type = "ssh-key"       // private key file
-	TypeCredential Type = "credential"    // username and password pair
+	TypeURL          Type = "url"           // a canary URL, fetched by whoever found it
+	TypeWebImage     Type = "web-image"     // a remote image to embed in a document
+	TypeOfficeDoc    Type = "office-doc"    // a .docx that phones home when opened
+	TypeAWSKey       Type = "aws-key"       // AWS access key pair
+	TypeAPIToken     Type = "api-token"     // generic bearer token
+	TypeDBString     Type = "db-connection" // database connection string
+	TypeSSHKey       Type = "ssh-key"       // private key file
+	TypeCredential   Type = "credential"    // username and password pair
+	TypeLLMKey       Type = "llm-key"       // API key shaped like an LLM provider's
+	TypePromptCanary Type = "prompt-canary" // invisible instruction for detecting LLM processing
 )
 
 // AllTypes lists every mintable type.
 func AllTypes() []Type {
 	return []Type{TypeURL, TypeWebImage, TypeOfficeDoc, TypeAWSKey,
-		TypeAPIToken, TypeDBString, TypeSSHKey, TypeCredential}
+		TypeAPIToken, TypeDBString, TypeSSHKey, TypeCredential,
+		TypeLLMKey, TypePromptCanary}
 }
 
 // Token is one piece of bait.
@@ -187,6 +190,19 @@ func (s *Store) Mint(typ Type, label, location string) (*Token, error) {
 	case TypeCredential:
 		t.Value = "svc_backup"
 		t.Secret = randomSecret(16)
+	case TypeLLMKey:
+		// Shaped like an OpenAI key so tooling and attackers recognise it. It is
+		// not a real key; it alerts when the value appears anywhere in the
+		// deployment, which catches both stolen-key reuse and shadow AI usage.
+		t.Value = "sk-proj-" + randomSecret(48)
+		t.Notes = "looks like an LLM provider API key; alerts when used or seen on a decoy"
+	case TypePromptCanary:
+		// An invisible instruction embedded in a document. If an LLM processes
+		// the document, it follows the instruction and fetches the callback URL,
+		// revealing that someone is running AI over data they should not have.
+		t.Value = fmt.Sprintf("%s/t/%s", s.baseURL, id)
+		t.Secret = randomSecret(8)
+		t.Notes = "embed in a document; if an LLM processes it, the canary fires"
 	default:
 		return nil, fmt.Errorf("tokens: unknown type %q (have: %v)", typ, AllTypes())
 	}

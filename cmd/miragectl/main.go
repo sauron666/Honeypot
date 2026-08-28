@@ -49,6 +49,7 @@ commands:
   fingerprint score how identifiable each decoy is, and say what gives it away
   assure      run the self-test: attack the deployment and verify it detected it
   presence-ca issue the mutual-TLS material for the overlay hub and its agents
+  economics   ROI metrics: attacker hours consumed, confirmed incidents, top techniques
   vms         list full-OS decoys, and burn or reset one during an incident
   status      query a running director over its API
   version     print the version
@@ -92,6 +93,8 @@ func main() {
 		err = assureCmd(args)
 	case "presence-ca":
 		err = presenceCA(args)
+	case "economics":
+		err = economicsCmd(args)
 	case "vms":
 		err = vmsCmd(args)
 	case "status":
@@ -1005,4 +1008,44 @@ func checkVMFarm(reg *drivers.Registry, cfg *config.Config) int {
 	}
 	fmt.Printf("  [ ok ] containment verified by %q\n", cfg.Drivers.Fabric)
 	return problems
+}
+
+func economicsCmd(args []string) error {
+	fs := flag.NewFlagSet("economics", flag.ExitOnError)
+	addr := fs.String("api", "http://127.0.0.1:8422", "director API base URL")
+	token := fs.String("token", "", "bearer token")
+	fs.Parse(args)
+
+	body, err := apiGet(*addr+"/api/economics", *token)
+	if err != nil {
+		return err
+	}
+	var e struct {
+		TotalEngagements   int      `json:"total_engagements"`
+		AttackerHours      float64  `json:"attacker_hours"`
+		ConfirmedIncidents int      `json:"confirmed_incidents"`
+		FalsePositives     int      `json:"false_positives"`
+		AvgTimeToDetect    string   `json:"avg_time_to_detect"`
+		AvgRiskScore       int      `json:"avg_risk_score"`
+		TopTechniques      []string `json:"top_techniques"`
+	}
+	if err := json.Unmarshal(body, &e); err != nil {
+		return err
+	}
+
+	fmt.Println("MIRAGE Engagement Economics")
+	fmt.Println("===========================")
+	fmt.Printf("  Total engagements:      %d\n", e.TotalEngagements)
+	fmt.Printf("  Attacker hours burned:  %.1f\n", e.AttackerHours)
+	fmt.Printf("  Confirmed incidents:    %d\n", e.ConfirmedIncidents)
+	fmt.Printf("  False positives:        %d (by construction)\n", e.FalsePositives)
+	fmt.Printf("  Avg time to detect:     %s\n", e.AvgTimeToDetect)
+	fmt.Printf("  Avg risk score:         %d/100\n", e.AvgRiskScore)
+	if len(e.TopTechniques) > 0 {
+		fmt.Printf("  Top ATT&CK techniques:  %s\n", strings.Join(e.TopTechniques, ", "))
+	}
+	if e.TotalEngagements == 0 {
+		fmt.Println("\nNo engagements yet. Attack a decoy to generate data.")
+	}
+	return nil
 }

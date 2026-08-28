@@ -29,6 +29,7 @@ func defaultCatalog() []generator {
 		{kind: "winscp-session", services: []string{"ssh", "ftp"}, os: Windows, build: buildWinSCP},
 		{kind: "db-config", services: []string{"mssql", "mysql"}, os: Any, build: buildDBConfig},
 		{kind: "creds-file", services: []string{"http", "ssh", "rdp"}, os: Any, build: buildCredsFile},
+		{kind: "llm-key", services: []string{"http"}, os: Any, build: buildLLMKey},
 	}
 }
 
@@ -247,6 +248,23 @@ func buildCredsFile(p *Planner, d Decoy, tgt Target) (*Crumb, error) {
 // obscure renders a secret as a short opaque blob, so a saved-session file does
 // not carry the honeytoken secret in the clear where a casual glance would spot
 // it. The real secret is what the watcher matches; this is only for looks.
+// buildLLMKey plants a file that looks like an LLM provider's API key config.
+// These are the most stolen credentials of 2025-2026: every attacker who finds
+// one tries it immediately, and the moment they do the platform catches them.
+func buildLLMKey(p *Planner, d Decoy, tgt Target) (*Crumb, error) {
+	tok, err := p.minter.Mint(tokens.TypeLLMKey, "breadcrumb llm-key "+d.Host, "llm key on "+tgt.User+"'s endpoint")
+	if err != nil {
+		return nil, err
+	}
+	content := fmt.Sprintf("# OpenAI API configuration\n# Project: internal-analytics (%s)\nOPENAI_API_KEY=%s\nOPENAI_ORG=org-mirage\n",
+		d.Host, tok.Value)
+	return &Crumb{
+		Kind: "llm-key", Path: join(tgt, ".config", "openai", "credentials"),
+		Content: content, Mode: "0600", TokenID: tok.ID, Decoy: d.ID,
+		Explain: "LLM provider API key (canary) referencing " + d.Host,
+	}, nil
+}
+
 func obscure(secret string) string {
 	var b strings.Builder
 	for _, r := range secret {
