@@ -1,0 +1,54 @@
+# MIRAGE deception platform — systemd unit
+#
+# Install:
+#   make install-systemd            # copies binaries + this unit
+#   mkdir -p /etc/mirage /var/lib/mirage
+#   cp profiles/p0-box.yaml /etc/mirage/config.yaml   # then edit it
+#   systemctl enable --now mirage-director
+#
+# The service runs unprivileged and is locked down: it cannot escalate, cannot
+# write outside its data directory, and a honeypot must never run as root.
+[Unit]
+Description=MIRAGE deception platform (director)
+Documentation=https://github.com/sauron666/Honeypot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mirage-director --config /etc/mirage/config.yaml
+Restart=on-failure
+RestartSec=5
+
+# Run as a dedicated unprivileged user. Create it once with:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin mirage
+User=mirage
+Group=mirage
+
+# The evidence lives here and must survive restarts.
+StateDirectory=mirage
+WorkingDirectory=/var/lib/mirage
+
+# Lock the service down. A deception platform is a high-value target precisely
+# because it is where all the evidence is; none of this should surprise an
+# operator who reads it.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+ReadWritePaths=/var/lib/mirage
+
+# Binding the real low ports (22, 445, ...) needs this capability; if you
+# redirect ports at the firewall instead (recommended), remove both lines.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

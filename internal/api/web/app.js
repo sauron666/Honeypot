@@ -237,6 +237,101 @@ async function loadDecoys() {
   }
 }
 
+
+// --------------------------------------------------------------- infrastructure
+
+async function loadInfra() {
+  const box = $('infra');
+  const [vms, presence] = await Promise.all([
+    api('/api/vms').catch(() => ({ enabled: false, decoys: [] })),
+    api('/api/presence').catch(() => ({ enabled: false, agents: [] })),
+  ]);
+  box.replaceChildren();
+
+  if (vms.enabled && (vms.decoys || []).length) {
+    box.appendChild(el('div', 'section-head', 'Full-OS decoys'));
+    for (const d of vms.decoys) {
+      const row = el('div', 'row');
+      const burned = d.burned;
+      row.appendChild(el('div', 'sev ' + (burned ? 'high' : 'low')));
+      const main = el('div', 'row-main');
+      const top = el('div', 'row-top');
+      top.appendChild(el('span', 'msg', `${d.id} — ${d.persona}`));
+      top.appendChild(el('span', 'time', d.state));
+      main.appendChild(top);
+      const meta = el('div', 'meta');
+      meta.appendChild(el('span', 'tag', d.template || 'vm'));
+      if (d.baseline) meta.appendChild(el('span', 'tag', 'baseline'));
+      if (d.revert && d.revert !== 'never') meta.appendChild(el('span', 'tag', 'reset: ' + d.revert));
+      if (burned) meta.appendChild(el('span', 'tag bad', 'BURNED: ' + (d.burn_reason || '')));
+      main.appendChild(meta);
+
+      if (!burned) {
+        const actions = el('div', 'meta');
+        const burn = el('button', 'link', 'burn');
+        burn.title = 'Take this decoy out of service and preserve it as evidence. It is never restarted.';
+        burn.addEventListener('click', () => vmAction(d.id, 'burn'));
+        actions.appendChild(burn);
+        if (vms.can_revert) {
+          const reset = el('button', 'link', 'reset');
+          reset.title = 'Return this decoy to its clean baseline, snapshotting the dirty state first.';
+          reset.addEventListener('click', () => vmAction(d.id, 'revert'));
+          actions.appendChild(reset);
+        }
+        main.appendChild(actions);
+      }
+      row.appendChild(main);
+      box.appendChild(row);
+    }
+  }
+
+  if (presence.enabled) {
+    box.appendChild(el('div', 'section-head', 'Overlay agents'));
+    const agents = presence.agents || [];
+    if (!agents.length) {
+      const row = el('div', 'row');
+      row.appendChild(el('div', 'sev low'));
+      row.appendChild(el('div', 'row-main', 'No agents connected. The hub is listening at ' + (presence.hub || '?') + '.'));
+      box.appendChild(row);
+    }
+    for (const a of agents) {
+      const row = el('div', 'row');
+      row.appendChild(el('div', 'sev low'));
+      const main = el('div', 'row-main');
+      const top = el('div', 'row-top');
+      top.appendChild(el('span', 'msg', `${a.id} — ${a.persona}`));
+      top.appendChild(el('span', 'time', a.remote || ''));
+      main.appendChild(top);
+      const meta = el('div', 'meta');
+      meta.appendChild(el('span', 'tag', 'decoy ' + (a.decoy_id || '')));
+      for (const svc of (a.services || [])) meta.appendChild(el('span', 'tag', svc));
+      main.appendChild(meta);
+      row.appendChild(main);
+      box.appendChild(row);
+    }
+  }
+
+  if (!box.childNodes.length) {
+    empty(box, 'No full-OS decoys or overlay agents in this deployment.');
+  }
+}
+
+async function vmAction(id, action) {
+  const label = action === 'burn' ? 'burning' : 'resetting';
+  toast(`${label} ${id}...`);
+  try {
+    const r = await api(`/api/vms/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'from the operator console' }),
+    });
+    toast(`${action}: ${r.id}`, 'good');
+    loadInfra().catch(showError);
+  } catch (err) {
+    showError(err);
+  }
+}
+
 // --------------------------------------------------------------- events
 
 function eventQuery() {
@@ -429,7 +524,7 @@ function switchView(side, view) {
     tab.classList.toggle('active', tab.dataset.view === view);
   }
   const views = side === 'left'
-    ? ['engagements', 'tokens', 'decoys']
+    ? ['engagements', 'tokens', 'decoys', 'infra']
     : ['events', 'detections'];
   for (const v of views) $('view-' + v).hidden = v !== view;
 
@@ -449,6 +544,7 @@ async function refresh() {
   if (state.leftView === 'engagements') jobs.push(loadEngagements());
   if (state.leftView === 'tokens') jobs.push(loadTokens());
   if (state.leftView === 'decoys') jobs.push(loadDecoys());
+  if (state.leftView === 'infra') jobs.push(loadInfra());
   if (state.rightView === 'events') jobs.push(loadEvents());
   if (state.rightView === 'detections') jobs.push(loadDetections());
   try {

@@ -103,3 +103,12 @@ td.k{color:var(--dim);width:150px;white-space:nowrap}
 .rule .why{color:var(--dim);font-size:11px;margin:0 0 6px}
 .rejected{padding:10px 12px;color:var(--dim);font-size:11px;border-top:1px solid var(--line)}
 .rejected b{color:var(--fg)}
+
+/* Infrastructure panel: section headers and the burned marker. */
+.section-head{margin:12px 4px 4px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--muted);font-weight:600}
+.section-head:first-child{margin-top:2px}
+.tag.bad{color:#ff9b9b;border-color:#5a2a2a}
+button.link{background:none;border:none;color:var(--accent,#6ab0ff);cursor:pointer;
+  padding:2px 6px;font:inherit;font-size:12px}
+button.link:hover{text-decoration:underline}

@@ -24,6 +24,7 @@
       <button class="tab active" data-view="engagements">Engagements</button>
       <button class="tab" data-view="tokens">Honeytokens</button>
       <button class="tab" data-view="decoys">Decoys</button>
+      <button class="tab" data-view="infra">Infrastructure</button>
     </nav>
 
     <div class="view" id="view-engagements">
@@ -45,6 +46,11 @@
     <div class="view" id="view-decoys" hidden>
       <p class="note">What this deployment presents to the network.</p>
       <div id="decoys" class="list"></div>
+    </div>
+
+    <div class="view" id="view-infra" hidden>
+      <p class="note">Full-OS decoys and overlay agents. Burn a VM to preserve it as evidence; reset returns it to baseline.</p>
+      <div id="infra" class="list"></div>
     </div>
   </section>
 
