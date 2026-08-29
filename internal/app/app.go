@@ -71,6 +71,15 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if n := evStore.RecoveredBytes(); n > 0 {
+		// A previous run was killed mid-append. The torn record was dropped and
+		// the chain resumed from the last durable event. Saying so plainly
+		// matters: silently repairing evidence is exactly what a tamper-evident
+		// store must not do without a trace.
+		log.Warn("recovered a torn final record from a previous crash; "+
+			"the evidence chain resumed from the last durable event",
+			"dropped_bytes", n, "file", cfg.Storage.EvidenceFile)
+	}
 
 	a := &App{
 		Config:  cfg,

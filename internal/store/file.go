@@ -42,6 +42,11 @@ type FileStore struct {
 	syncEvery  int
 	sinceSync  int
 	verifiedAt int64
+	// recoveredBytes is how many bytes of a torn final line were dropped on the
+	// last open. A crash mid-append (a kill, a power loss, a scheduled-task
+	// stop) leaves a partial last record; recovering from it is what lets the
+	// director restart instead of refusing to start on its own evidence.
+	recoveredBytes int64
 }
 
 // FileOptions configures a FileStore.
@@ -103,23 +108,50 @@ func (s *FileStore) replay() error {
 	if err != nil {
 		return fmt.Errorf("store: replay %s: %w", s.path, err)
 	}
-	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	r := bufio.NewReaderSize(f, 64*1024)
 
 	var lastSeq uint64
 	var lastHash string
+	var offset int64 // byte offset just past the last complete, decoded record
 	line := 0
-	for sc.Scan() {
+	var tornTail int64 // bytes of a partial final record to drop, if any
+
+	for {
+		raw, rerr := r.ReadBytes('\n')
+		if rerr != nil && rerr != io.EOF {
+			f.Close()
+			return fmt.Errorf("store: read %s: %w", s.path, rerr)
+		}
+
+		// A chunk without a trailing newline is a torn final record: the write
+		// that produced it never completed (a crash, a kill, a power loss). It
+		// was never a durable, acknowledged event, so dropping it removes
+		// nothing the platform ever promised to keep -- and it is the one thing
+		// standing between a killed director and a clean restart.
+		if rerr == io.EOF {
+			trimmed := bytesTrimSpace(raw)
+			if len(trimmed) > 0 {
+				tornTail = int64(len(raw))
+			}
+			break
+		}
+
 		line++
-		raw := sc.Bytes()
-		if len(raw) == 0 {
+		trimmed := bytesTrimSpace(raw)
+		if len(trimmed) == 0 {
+			offset += int64(len(raw))
 			continue
 		}
-		e, err := event.Decode(raw)
-		if err != nil {
-			return fmt.Errorf("store: %s line %d is corrupt (crash during append?): %w", s.path, line, err)
+		e, derr := event.Decode(trimmed)
+		if derr != nil {
+			// This record IS newline-terminated, so the write completed; a
+			// decode failure here is corruption or tampering in the body of the
+			// file, not a torn tail. That must never be silently repaired.
+			f.Close()
+			return fmt.Errorf("store: %s line %d is corrupt (not a torn tail -- "+
+				"the record is complete but does not decode, which means tampering or "+
+				"disk corruption): %w", s.path, line, derr)
 		}
 		if e.Mirage.Chain != nil {
 			lastSeq = e.Mirage.Chain.Seq
@@ -127,12 +159,43 @@ func (s *FileStore) replay() error {
 		}
 		s.remember(e)
 		s.count++
+		offset += int64(len(raw))
 	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("store: read %s: %w", s.path, err)
+	f.Close()
+
+	// Physically drop the torn tail so the next append starts on a clean record
+	// boundary. Without this, the partial bytes would sit in front of the new
+	// event and every future read would trip over them.
+	if tornTail > 0 {
+		if err := os.Truncate(s.path, offset); err != nil {
+			return fmt.Errorf("store: recover torn tail of %s: %w", s.path, err)
+		}
+		s.recoveredBytes = tornTail
 	}
+
 	s.chain = event.ResumeChain(lastSeq, lastHash)
 	return nil
+}
+
+// RecoveredBytes reports how many bytes of a torn final record were dropped
+// when the store was opened, or zero if the file was intact. The app logs this
+// so a recovered crash is visible rather than silent.
+func (s *FileStore) RecoveredBytes() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recoveredBytes
+}
+
+// bytesTrimSpace trims ASCII whitespace without allocating a string.
+func bytesTrimSpace(b []byte) []byte {
+	start, end := 0, len(b)
+	for start < end && (b[start] == ' ' || b[start] == '\t' || b[start] == '\r' || b[start] == '\n') {
+		start++
+	}
+	for end > start && (b[end-1] == ' ' || b[end-1] == '\t' || b[end-1] == '\r' || b[end-1] == '\n') {
+		end--
+	}
+	return b[start:end]
 }
 
 // remember inserts into the memory window, evicting the oldest when full.
