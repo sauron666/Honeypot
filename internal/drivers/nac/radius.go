@@ -9,6 +9,9 @@ package nac
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"time"
@@ -110,31 +113,76 @@ func (r *Radius) SteerToDeception(ctx context.Context, macAddr, switchIP string,
 	// This is a simplified implementation. A production version would use a
 	// proper RADIUS library, but the protocol is simple enough that the
 	// essential operation — reassigning a VLAN — is a single UDP packet.
-	coaAddr := fmt.Sprintf("%s:%d", r.cfg.Server, r.cfg.CoAPort)
+	// CoA goes to the NAS on the CoA port, not to the RADIUS auth port in
+	// Server. Server may be "host" or "host:port"; take just the host and pair
+	// it with CoAPort. Building "Server:CoAPort" blindly yields "host:1812:3799".
+	coaHost := r.cfg.Server
+	if h, _, err := net.SplitHostPort(r.cfg.Server); err == nil {
+		coaHost = h
+	}
+	coaAddr := net.JoinHostPort(coaHost, fmt.Sprintf("%d", r.cfg.CoAPort))
 	conn, err := net.DialTimeout("udp", coaAddr, 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("nac/freeradius: CoA to %s: %w", coaAddr, err)
 	}
 	defer conn.Close()
 
-	// Build a minimal RADIUS CoA-Request (Code 43)
-	pkt := buildCoAPacket(macAddr, r.cfg.DeceptionVLAN, []byte(r.cfg.Secret))
+	// Build a signed CoA-Request. The Request Authenticator is not optional:
+	// RFC 5176 requires it, and FreeRADIUS drops a CoA whose authenticator does
+	// not verify -- so a packet with a zero authenticator looks like success to
+	// us while the server silently rejects it. That is the worst kind of bug in
+	// a security control: it reports that it steered a device it did not.
+	id := randByte()
+	pkt := buildCoAPacket(id, macAddr, r.cfg.DeceptionVLAN, []byte(r.cfg.Secret))
+	requestAuth := append([]byte(nil), pkt[4:20]...)
+
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if _, err := conn.Write(pkt); err != nil {
 		return fmt.Errorf("nac/freeradius: send CoA: %w", err)
 	}
 
-	return nil
+	// Read the reply and act on it. A NAS answers CoA-ACK (44) on success or
+	// CoA-NAK (45) on refusal; treating both as success would again mean
+	// claiming a steering that did not happen.
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp := make([]byte, 4096)
+	n, err := conn.Read(resp)
+	if err != nil {
+		return fmt.Errorf("nac/freeradius: no reply to CoA from %s (device not steered): %w", coaAddr, err)
+	}
+	if n < 20 {
+		return fmt.Errorf("nac/freeradius: truncated CoA reply (%d bytes)", n)
+	}
+	// A reply must be for our request and carry a valid Response Authenticator,
+	// or it is a spoof or a secret mismatch -- either way not proof of steering.
+	if resp[1] != id {
+		return fmt.Errorf("nac/freeradius: CoA reply id %d does not match request %d", resp[1], id)
+	}
+	want := coaResponseAuthenticator(resp[:n], requestAuth, []byte(r.cfg.Secret))
+	if !hmacEqual(resp[4:20], want) {
+		return fmt.Errorf("nac/freeradius: CoA reply failed authenticator check; " +
+			"the shared secret does not match the NAS")
+	}
+	switch resp[0] {
+	case 44: // CoA-ACK
+		return nil
+	case 45: // CoA-NAK
+		return fmt.Errorf("nac/freeradius: the NAS refused to steer %s (CoA-NAK); "+
+			"check that it supports RFC 5176 CoA and the shared secret matches", macAddr)
+	default:
+		return fmt.Errorf("nac/freeradius: unexpected CoA reply code %d", resp[0])
+	}
 }
 
-// buildCoAPacket constructs a minimal RADIUS CoA-Request.
-// Code=43, Identifier=1, Length, Authenticator, Attributes.
-func buildCoAPacket(mac string, vlan int, secret []byte) []byte {
-	// Attributes:
-	// Calling-Station-Id (31) = MAC address
-	// Tunnel-Type (64) = VLAN (13)
-	// Tunnel-Medium-Type (65) = IEEE-802 (6)
-	// Tunnel-Private-Group-Id (81) = VLAN ID as string
+// buildCoAPacket constructs a signed RADIUS CoA-Request (RFC 5176).
+//
+// Attributes carried:
+//
+//	Calling-Station-Id (31)      = MAC, identifies the session to reassign
+//	Tunnel-Type (64)             = VLAN (13)
+//	Tunnel-Medium-Type (65)      = IEEE-802 (6)
+//	Tunnel-Private-Group-Id (81) = the deception VLAN id
+func buildCoAPacket(id byte, mac string, vlan int, secret []byte) []byte {
 	macAttr := radiusAttr(31, []byte(mac))
 	tunnelType := radiusAttr(64, []byte{0x00, 0x00, 0x00, 13})  // tag=0, VLAN
 	tunnelMedium := radiusAttr(65, []byte{0x00, 0x00, 0x00, 6}) // tag=0, IEEE-802
@@ -145,16 +193,56 @@ func buildCoAPacket(mac string, vlan int, secret []byte) []byte {
 	attrs = append(attrs, tunnelMedium...)
 	attrs = append(attrs, tunnelGroup...)
 
-	// Header: Code(1) + ID(1) + Length(2) + Authenticator(16)
 	length := 20 + len(attrs)
 	pkt := make([]byte, 20, length)
 	pkt[0] = 43 // CoA-Request
-	pkt[1] = 1  // Identifier
-	pkt[2] = byte(length >> 8)
-	pkt[3] = byte(length)
-	// Authenticator is all zeros for request (will be filled with MD5 in production)
+	pkt[1] = id
+	binary.BigEndian.PutUint16(pkt[2:4], uint16(length))
+	// The 16 authenticator octets are zero while computing the signature.
 	pkt = append(pkt, attrs...)
+
+	// Request Authenticator = MD5(Code+ID+Length+16 zero octets+Attributes+Secret).
+	sum := md5.New()
+	sum.Write(pkt)
+	sum.Write(secret)
+	copy(pkt[4:20], sum.Sum(nil))
 	return pkt
+}
+
+// coaResponseAuthenticator computes what a valid reply's authenticator must be,
+// so a caller can reject a spoofed or misconfigured NAS reply:
+// MD5(Code+ID+Length+RequestAuthenticator+Attributes+Secret).
+func coaResponseAuthenticator(reply, requestAuth, secret []byte) []byte {
+	sum := md5.New()
+	sum.Write(reply[:4])
+	sum.Write(requestAuth)
+	if len(reply) > 20 {
+		sum.Write(reply[20:])
+	}
+	sum.Write(secret)
+	return sum.Sum(nil)
+}
+
+// randByte is used where an unpredictable identifier helps; falls back to time.
+func randByte() byte {
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return byte(time.Now().UnixNano())
+	}
+	return b[0]
+}
+
+// hmacEqual is a constant-time comparison, so a wrong secret cannot be probed
+// by timing the authenticator check.
+func hmacEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var v byte
+	for i := range a {
+		v |= a[i] ^ b[i]
+	}
+	return v == 0
 }
 
 func radiusAttr(typ byte, val []byte) []byte {
