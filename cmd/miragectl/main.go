@@ -18,14 +18,18 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/sauron666/Honeypot/internal/compliance"
 	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/driverset"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
+	"github.com/sauron666/Honeypot/internal/export"
 	"github.com/sauron666/Honeypot/internal/farm"
+	"github.com/sauron666/Honeypot/internal/fleet"
 	"github.com/sauron666/Honeypot/internal/forge"
 	"github.com/sauron666/Honeypot/internal/honeyd"
+	"github.com/sauron666/Honeypot/internal/insider"
 	"github.com/sauron666/Honeypot/internal/presence"
 	"github.com/sauron666/Honeypot/internal/store"
 	"github.com/sauron666/Honeypot/internal/version"
@@ -50,6 +54,10 @@ commands:
   assure      run the self-test: attack the deployment and verify it detected it
   presence-ca issue the mutual-TLS material for the overlay hub and its agents
   economics   ROI metrics: attacker hours consumed, confirmed incidents, top techniques
+  export      export recorded IOCs as STIX 2.1, a TheHive alert, or a dedup IOC list
+  compliance  map the deployment's capabilities to NIS2/DORA/ISO/PCI/SOC2/IEC controls
+  insider     generate vertical-specific insider-threat lures + DPIA/policy templates
+  fleet       preview the identity-rotation schedule for the configured decoys
   vms         list full-OS decoys, and burn or reset one during an incident
   status      query a running director over its API
   version     print the version
@@ -93,6 +101,14 @@ func main() {
 		err = assureCmd(args)
 	case "presence-ca":
 		err = presenceCA(args)
+	case "export":
+		err = exportCmd(args)
+	case "compliance":
+		err = complianceCmd(args)
+	case "insider":
+		err = insiderCmd(args)
+	case "fleet":
+		err = fleetCmd(args)
 	case "economics":
 		err = economicsCmd(args)
 	case "vms":
@@ -1048,5 +1064,179 @@ func economicsCmd(args []string) error {
 	if e.TotalEngagements == 0 {
 		fmt.Println("\nNo engagements yet. Attack a decoy to generate data.")
 	}
+	return nil
+}
+
+// exportCmd turns recorded evidence into threat-intel a SIEM or TIP ingests.
+func exportCmd(args []string) error {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	path := fs.String("file", "data/evidence.jsonl", "evidence file")
+	format := fs.String("format", "stix", "stix | thehive | iocs")
+	fs.Parse(args)
+
+	st, err := store.OpenFile(*path, store.FileOptions{MemoryWindow: 500_000, SyncEvery: 0})
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	all, err := st.Query(context.Background(), store.Query{Limit: 1_000_000, Ascending: true})
+	if err != nil {
+		return err
+	}
+
+	// One observation per event that names a source and a technique -- the
+	// deduplication downstream collapses the repeats one intrusion produces.
+	var obs []export.Observation
+	for _, e := range all {
+		if e.Src == nil || e.Src.IP == "" {
+			continue
+		}
+		tech := ""
+		if len(e.Mirage.Attack) > 0 {
+			tech = e.Mirage.Attack[0].Technique
+		}
+		obs = append(obs, export.Observation{
+			SrcIP: e.Src.IP, Service: e.Mirage.Service, Technique: tech,
+			Description: e.Message, Timestamp: e.Timestamp(),
+			IOCType: "ipv4-addr", IOCValue: e.Src.IP,
+		})
+	}
+	if len(obs) == 0 {
+		return fmt.Errorf("no observations with a source address in %s", *path)
+	}
+
+	switch *format {
+	case "stix":
+		b, err := export.STIXBundle(obs, "default", "default")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+	case "iocs":
+		fmt.Print(export.IOCList(obs))
+	case "thehive":
+		o := obs[0]
+		var techs []string
+		for _, x := range obs {
+			if x.Technique != "" {
+				techs = append(techs, x.Technique)
+			}
+		}
+		b, err := export.TheHiveAlert("MIRAGE deception activity",
+			fmt.Sprintf("%d observations from %s", len(obs), o.SrcIP),
+			o.SrcIP, o.Service, 3, techs)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+	default:
+		return fmt.Errorf("unknown format %q (stix | thehive | iocs)", *format)
+	}
+	return nil
+}
+
+// complianceCmd maps what the deployment can do to regulatory controls.
+func complianceCmd(args []string) error {
+	fs := flag.NewFlagSet("compliance", flag.ExitOnError)
+	cfgPath := fs.String("config", "profiles/p0-box.yaml", "configuration file")
+	fs.Parse(args)
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+
+	cap := compliance.Capabilities{
+		HasDecoys:      len(cfg.Honeyd.Decoys) > 0,
+		HasHashChain:   true,
+		HasAlerts:      len(cfg.Alerts.Sinks) > 0,
+		HasEngagements: true,
+		HasForge:       true,
+		HasAssure:      true,
+		HasFingerprint: true,
+		HasTokens:      cfg.Tokens.BaseURL != "",
+		HasOverlay:     len(cfg.Presence.Agents) > 0,
+		HasVMFarm:      len(cfg.VMs.Decoys) > 0,
+		HasRansomware:  true,
+		DecoyCount:     len(cfg.Honeyd.Decoys),
+		SinkCount:      len(cfg.Alerts.Sinks),
+		FabricDriver:   cfg.Drivers.Fabric,
+		EvidenceFile:   cfg.Storage.EvidenceFile,
+	}
+	for _, d := range cfg.Honeyd.Decoys {
+		for _, svc := range d.Services {
+			if svc.Service == "kerberos" {
+				cap.HasKerberos = true
+			}
+		}
+	}
+	fmt.Print(compliance.ReportMarkdown(compliance.Audit(cap), cap))
+	return nil
+}
+
+// insiderCmd generates the honey documents and legal templates for an
+// insider-threat deployment.
+func insiderCmd(args []string) error {
+	fs := flag.NewFlagSet("insider", flag.ExitOnError)
+	vertical := fs.String("vertical", "generic", "healthcare | finance | legal | tech | generic")
+	domain := fs.String("domain", "corp.local", "the domain the lures reference")
+	dpiaOrg := fs.String("dpia-org", "", "if set, also print a DPIA template for this organisation")
+	dpo := fs.String("dpo", "dpo@example.com", "data protection officer contact for the DPIA")
+	fs.Parse(args)
+
+	lures := insider.NewKit(*vertical, *domain).GenerateLures()
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TYPE\tNAME")
+	for _, l := range lures {
+		fmt.Fprintf(w, "%s\t%s\n", l.Type, l.Name)
+	}
+	w.Flush()
+	fmt.Printf("\n%d lure(s) for vertical %q. Plant them on the file share as bait.\n",
+		len(lures), *vertical)
+
+	if *dpiaOrg != "" {
+		fmt.Println("\n=== DPIA template ===")
+		fmt.Println(insider.DPIATemplate(*dpiaOrg, *dpo))
+		fmt.Println("\n=== Policy template ===")
+		fmt.Println(insider.PolicyTemplate(*dpiaOrg))
+	}
+	return nil
+}
+
+// fleetCmd previews which decoys would rotate their identity, and to what.
+func fleetCmd(args []string) error {
+	fs := flag.NewFlagSet("fleet", flag.ExitOnError)
+	cfgPath := fs.String("config", "profiles/p0-box.yaml", "configuration file")
+	interval := fs.Duration("interval", 7*24*time.Hour, "base rotation interval")
+	fs.Parse(args)
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for _, d := range cfg.Honeyd.Decoys {
+		ids = append(ids, d.ID)
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("no decoys to rotate in %s", *cfgPath)
+	}
+	seed := cfg.DeploySeed
+	if seed == "" {
+		seed = cfg.Tenant + "|" + cfg.Site
+	}
+	due := fleet.Schedule(fleet.RotationPlan{Interval: *interval, Seed: seed}, ids, time.Now())
+	if len(due) == 0 {
+		fmt.Printf("No decoy is due to rotate right now (interval %s). "+
+			"Rotation is jittered per decoy, so they cycle at different times.\n", *interval)
+		return nil
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "DECOY\tNEW HOSTNAME")
+	for _, d := range due {
+		fmt.Fprintf(w, "%s\t%s\n", d.ID, d.Hostname)
+	}
+	w.Flush()
+	fmt.Println("\n(Rotation is deferred automatically for any decoy with an active engagement.)")
 	return nil
 }
