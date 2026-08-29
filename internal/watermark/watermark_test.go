@@ -1,6 +1,7 @@
 package watermark
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -69,5 +70,39 @@ func TestWatermarkSurvivesNaiveCopyPaste(t *testing.T) {
 	ch, ok := Extract(pasted, testSecret, []string{"leak-test", "other"})
 	if !ok || ch != "leak-test" {
 		t.Fatal("watermark did not survive copy-paste")
+	}
+}
+
+func TestEmbedWorksOnShortText(t *testing.T) {
+	// The original bug: text shorter than 17 words was silently not marked, so
+	// the operator believed a leak was traceable when it was not.
+	for _, text := range []string{
+		"short",
+		"a five word document here",
+		"Confidential quarterly report for the board of directors and executives",
+	} {
+		marked := Embed(text, "alice@corp", "secret")
+		who, ok := Extract(marked, "secret", []string{"bob@corp", "alice@corp", "eve@corp"})
+		if !ok || who != "alice@corp" {
+			t.Fatalf("round-trip failed on %q-word text: ok=%v who=%q", text, ok, who)
+		}
+		// The visible text (zero-width stripped) must be unchanged.
+		stripped := strings.Map(func(r rune) rune {
+			if r == '​' || r == '‌' {
+				return -1
+			}
+			return r
+		}, marked)
+		// whitespace channel may add spaces after sentences; this text has none.
+		if stripped != text {
+			t.Fatalf("visible text changed: %q -> %q", text, stripped)
+		}
+	}
+}
+
+func TestWrongSecretDoesNotMatch(t *testing.T) {
+	marked := Embed("some document text here for marking", "alice@corp", "right-secret")
+	if _, ok := Extract(marked, "wrong-secret", []string{"alice@corp"}); ok {
+		t.Fatal("a wrong secret produced a match")
 	}
 }

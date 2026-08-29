@@ -34,7 +34,9 @@ type Mark struct {
 	Bits string `json:"bits"`
 }
 
-// Embed adds an invisible mark to text, using all three techniques.
+// Embed adds an invisible mark to text. The zero-width channel always carries
+// the full mark regardless of length; the whitespace channel is redundant belt
+// and braces where the text has sentences.
 func Embed(text, channel, secret string) string {
 	bits := encode(channel, secret)
 	text = embedZeroWidth(text, bits)
@@ -85,23 +87,40 @@ func encode(channel, secret string) []byte {
 // embedZeroWidth inserts zero-width characters between the first N words.
 // Bit 0 → zero-width space (U+200B), bit 1 → zero-width non-joiner (U+200C).
 func embedZeroWidth(text string, bits []byte) string {
-	words := strings.Fields(text)
-	if len(words) < len(bits)+1 {
-		return text
-	}
-	var b strings.Builder
-	for i, w := range words {
-		if i > 0 {
-			b.WriteByte(' ')
+	// Every bit must be embedded, whatever the length of the text -- a
+	// watermark that silently does nothing on a short document is worse than
+	// none, because the operator believes the copy is traceable and it is not.
+	// Bits are placed after words while there are words to spare, and any that
+	// do not fit are appended as a contiguous invisible run. Extraction reads
+	// the zero-width characters in document order and does not care which of
+	// the two it was, so both are recovered identically.
+	zw := func(bit byte) rune {
+		if bit == 1 {
+			return '‌' // ZWNJ
 		}
-		b.WriteString(w)
-		if i < len(bits) {
-			if bits[i] == 1 {
-				b.WriteRune('‌') // ZWNJ
-			} else {
-				b.WriteRune('​') // ZWS
+		return '​' // ZWS
+	}
+	words := strings.Fields(text)
+	var b strings.Builder
+	placed := 0
+	if len(words) > 0 {
+		for i, w := range words {
+			if i > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(w)
+			if placed < len(bits) {
+				b.WriteRune(zw(bits[placed]))
+				placed++
 			}
 		}
+	} else {
+		b.WriteString(text)
+	}
+	// Append whatever did not fit between words, so all 16 bits are present.
+	for placed < len(bits) {
+		b.WriteRune(zw(bits[placed]))
+		placed++
 	}
 	return b.String()
 }

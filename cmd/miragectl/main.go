@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/sauron666/Honeypot/internal/compliance"
+	"gopkg.in/yaml.v3"
+
 	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/driverset"
@@ -28,11 +30,15 @@ import (
 	"github.com/sauron666/Honeypot/internal/farm"
 	"github.com/sauron666/Honeypot/internal/fleet"
 	"github.com/sauron666/Honeypot/internal/forge"
+	"github.com/sauron666/Honeypot/internal/graph"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/insider"
 	"github.com/sauron666/Honeypot/internal/presence"
+	"github.com/sauron666/Honeypot/internal/replay"
 	"github.com/sauron666/Honeypot/internal/store"
+	"github.com/sauron666/Honeypot/internal/toolkit"
 	"github.com/sauron666/Honeypot/internal/version"
+	"github.com/sauron666/Honeypot/internal/watermark"
 )
 
 const usage = `miragectl - MIRAGE deception platform
@@ -58,6 +64,10 @@ commands:
   compliance  map the deployment's capabilities to NIS2/DORA/ISO/PCI/SOC2/IEC controls
   insider     generate vertical-specific insider-threat lures + DPIA/policy templates
   fleet       preview the identity-rotation schedule for the configured decoys
+  graph       attack-path deception: score decoy coverage and suggest placements
+  toolkit     identify the attacker's tooling from a recorded engagement
+  watermark   embed or extract a per-recipient watermark in text
+  replay      reconstruct an SSH session from evidence as an asciinema recording
   vms         list full-OS decoys, and burn or reset one during an incident
   status      query a running director over its API
   version     print the version
@@ -109,6 +119,14 @@ func main() {
 		err = insiderCmd(args)
 	case "fleet":
 		err = fleetCmd(args)
+	case "graph":
+		err = graphCmd(args)
+	case "toolkit":
+		err = toolkitCmd(args)
+	case "watermark":
+		err = watermarkCmd(args)
+	case "replay":
+		err = replayCmd(args)
 	case "economics":
 		err = economicsCmd(args)
 	case "vms":
@@ -1238,5 +1256,228 @@ func fleetCmd(args []string) error {
 	}
 	w.Flush()
 	fmt.Println("\n(Rotation is deferred automatically for any decoy with an active engagement.)")
+	return nil
+}
+
+// graphCmd scores decoy coverage over an estate's attack paths and suggests
+// where to place the next decoys.
+func graphCmd(args []string) error {
+	fs := flag.NewFlagSet("graph", flag.ExitOnError)
+	estatePath := fs.String("estate", "", "estate manifest (yaml): nodes, edges, decoys (required)")
+	suggest := fs.Int("suggest", 5, "how many placement suggestions to print")
+	fs.Parse(args)
+	if *estatePath == "" {
+		return fmt.Errorf("--estate is required: describe your network's assets and reachability")
+	}
+	raw, err := os.ReadFile(*estatePath)
+	if err != nil {
+		return err
+	}
+	var estate graph.Estate
+	if err := yaml.Unmarshal(raw, &estate); err != nil {
+		return fmt.Errorf("parse %s: %w", *estatePath, err)
+	}
+	g, err := graph.Build(estate)
+	if err != nil {
+		return err
+	}
+	cov := g.Analyze()
+	fmt.Printf("Attack-path coverage: %d of %d paths to a crown jewel pass a decoy (%.0f%%)\n",
+		cov.CoveredPaths, cov.TotalPaths, cov.CoverageRatio*100)
+	if cov.TotalPaths == 0 {
+		fmt.Println("No path to a crown jewel was found. Mark your critical assets with crown: true.")
+		return nil
+	}
+	sugg := g.Suggest(*suggest)
+	if len(sugg) == 0 {
+		fmt.Println("Every attack path already passes a decoy. Coverage is complete.")
+		return nil
+	}
+	fmt.Printf("\nTop %d placements, by how many uncovered paths each would catch:\n", len(sugg))
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "PLACE A DECOY ON\tSERVICE\tCATCHES PATHS\tWHY")
+	for _, s := range sugg {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", s.Edge, s.Service, s.Covers, s.Reason)
+	}
+	w.Flush()
+	return nil
+}
+
+// toolkitCmd identifies the attacker's tooling from a recorded engagement and
+// predicts the likely next step.
+func toolkitCmd(args []string) error {
+	fs := flag.NewFlagSet("toolkit", flag.ExitOnError)
+	path := fs.String("file", "data/evidence.jsonl", "evidence file")
+	engID := fs.String("engagement", "", "engagement id (default: every engagement)")
+	fs.Parse(args)
+
+	st, err := store.OpenFile(*path, store.FileOptions{MemoryWindow: 500_000, SyncEvery: 0})
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	all, err := st.Query(context.Background(), store.Query{Limit: 1_000_000, Ascending: true})
+	if err != nil {
+		return err
+	}
+	engagements := engagement.FromEvents(all)
+	if len(engagements) == 0 {
+		return fmt.Errorf("no engagements in %s", *path)
+	}
+	db := toolkit.New()
+
+	printed := 0
+	for _, eng := range engagements {
+		if *engID != "" && eng.ID != *engID {
+			continue
+		}
+		// The signature indicators match with substring containment, so a
+		// joined multi-value string lets one engagement carry every technique
+		// and service it touched.
+		attrs := map[string]string{
+			"technique":     strings.Join(eng.Techniques, ","),
+			"service":       strings.Join(eng.Services, ","),
+			"authenticated": fmt.Sprint(eng.Authenticated),
+		}
+		for _, e := range all {
+			if e.Mirage.EngagementID == eng.ID {
+				if v := e.GetString("etype"); v != "" {
+					attrs["etype"] = v
+				}
+			}
+		}
+		matches := db.Identify(attrs, eng.Events)
+		if len(matches) == 0 {
+			continue
+		}
+		printed++
+		fmt.Printf("engagement %s (src %s, risk %d):\n", eng.ID, eng.SrcIP, eng.RiskScore)
+		for _, m := range matches {
+			fmt.Printf("  %-18s %-8s %s\n", m.Tool.Name, "["+m.Confidence+"]", m.Tool.Category)
+			if m.Tool.NextLikely != "" {
+				fmt.Printf("      likely next: %s — %s\n", m.Tool.NextLikely, m.Tool.Countermeasure)
+			}
+		}
+	}
+	if printed == 0 {
+		fmt.Println("No known tooling matched. The DB fingerprints scanners, Impacket, Rubeus, C2 and more.")
+	}
+	return nil
+}
+
+// watermarkCmd embeds or extracts a per-recipient watermark, so a leaked
+// document can be traced back to who received it.
+func watermarkCmd(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: miragectl watermark embed|extract [flags] < text")
+	}
+	sub := args[0]
+	fs := flag.NewFlagSet("watermark", flag.ExitOnError)
+	secret := fs.String("secret", "", "the deployment secret (required)")
+	channel := fs.String("channel", "", "embed: the recipient/channel to mark for")
+	candidates := fs.String("candidates", "", "extract: comma-separated channels to test")
+	fs.Parse(args[1:])
+	if *secret == "" {
+		return fmt.Errorf("--secret is required")
+	}
+	body, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "embed":
+		if *channel == "" {
+			return fmt.Errorf("embed needs --channel (who this copy is for)")
+		}
+		fmt.Print(watermark.Embed(string(body), *channel, *secret))
+	case "extract":
+		if *candidates == "" {
+			return fmt.Errorf("extract needs --candidates (the channels to test against)")
+		}
+		who, ok := watermark.Extract(string(body), *secret, splitList(*candidates))
+		if !ok {
+			fmt.Fprintln(os.Stderr, "no watermark matched any candidate")
+			os.Exit(1)
+		}
+		fmt.Println(who)
+	default:
+		return fmt.Errorf("unknown subcommand %q (embed | extract)", sub)
+	}
+	return nil
+}
+
+// replayCmd reconstructs an SSH session from the transcript stored in evidence,
+// as an asciinema recording an analyst can play back.
+func replayCmd(args []string) error {
+	fs := flag.NewFlagSet("replay", flag.ExitOnError)
+	path := fs.String("file", "data/evidence.jsonl", "evidence file")
+	engID := fs.String("engagement", "", "engagement id (default: the highest-risk one)")
+	out := fs.String("out", "", "write the .cast file here instead of stdout")
+	fs.Parse(args)
+
+	st, err := store.OpenFile(*path, store.FileOptions{MemoryWindow: 500_000, SyncEvery: 0})
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	all, err := st.Query(context.Background(), store.Query{Limit: 1_000_000, Ascending: true})
+	if err != nil {
+		return err
+	}
+	engagements := engagement.FromEvents(all)
+	if len(engagements) == 0 {
+		return fmt.Errorf("no engagements in %s", *path)
+	}
+	eng := engagements[0]
+	if *engID != "" {
+		eng = nil
+		for _, e := range engagements {
+			if e.ID == *engID {
+				eng = e
+			}
+		}
+		if eng == nil {
+			return fmt.Errorf("engagement %q not found", *engID)
+		}
+	}
+
+	rec := replay.New()
+	offset := 0.0
+	found := false
+	for _, e := range all {
+		if e.Mirage.EngagementID != eng.ID || e.Mirage.Service != "ssh" {
+			continue
+		}
+		script := e.GetString("transcript")
+		if script == "" {
+			continue
+		}
+		found = true
+		for _, line := range strings.Split(script, "\n") {
+			if len(line) < 3 {
+				continue
+			}
+			offset += 0.8
+			switch line[:3] {
+			case ">> ": // attacker input
+				rec.InputAt(offset, line[3:]+"\r\n")
+			case "<< ": // decoy output
+				rec.OutputAt(offset, line[3:]+"\r\n")
+			}
+		}
+	}
+	if !found {
+		return fmt.Errorf("engagement %s has no SSH session transcript to replay", eng.ID)
+	}
+	cast := rec.Asciinema(120, 40, "MIRAGE replay "+eng.ID)
+	if *out == "" {
+		fmt.Print(cast)
+		fmt.Fprintf(os.Stderr, "\n(%d events. Pipe to a file and play with: asciinema play <file>)\n", rec.EventCount())
+		return nil
+	}
+	if err := os.WriteFile(*out, []byte(cast), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s (%d events). Play with: asciinema play %s\n", *out, rec.EventCount(), *out)
 	return nil
 }
