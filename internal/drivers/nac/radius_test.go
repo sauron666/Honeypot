@@ -56,7 +56,9 @@ func fakeNAS(t *testing.T, secret string, reply byte) (addr string, gotVLAN chan
 		resp[0] = reply
 		resp[1] = req[1]
 		resp[2], resp[3] = 0, 20
-		ra := md5.Sum(append(append(append([]byte{resp[0], resp[1], resp[2], resp[3]}, reqAuth...)), []byte(secret)...))
+		raInput := append([]byte{resp[0], resp[1], resp[2], resp[3]}, reqAuth...)
+		raInput = append(raInput, []byte(secret)...)
+		ra := md5.Sum(raInput)
 		copy(resp[4:20], ra[:])
 		pc.WriteTo(resp, raddr)
 	}()
