@@ -65,7 +65,7 @@ make build
 | `internal/fleet` | авто-ротация на идентичности (чиста функция на времето; отлага при активен engagement, пропуска изгорени) |
 | `internal/replay` | SSH session replay в asciinema v2 формат |
 | `internal/drivers/compute` (proxmox) | добавен `proxmox` драйвер към `inproc`/`podman`/`libvirt` |
-| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите (+ mirage-graph, honey MCP през miragectl/поддпакети) |
+| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите. `miragectl` изкарва всичко: doctor/plan/apply/verify/events/forge/tokens/assure/fingerprint/vms/presence-ca/economics + **export/compliance/insider/fleet/graph/toolkit/watermark/replay** |
 
 ### Протоколи (`internal/honeyd/svc_*.go`)
 
@@ -159,6 +159,18 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
 - **Един каталог, два изгледа.** LDAP и Kerberos четат от `buildHoneyDirectory`;
   ако svc_sql се вижда по LDAP, но не се roast-ва по Kerberos, атакуващият е
   намерил шева. `TestKerberosBaitAgreesWithWhatLDAPAdvertises` го пази.
+- **Торнат последен ред след kill не спира старта.** Крах/kill по средата на
+  append оставя частичен последен ред; `store.replay` го отрязва (torn tail) и
+  продължава веригата от последното трайно събитие — но повреда в СРЕДАТА на
+  файла (пълен ред, който не декодира) пак гърми, защото е подправяне.
+  `RecoveredBytes()` го докладва, `app` логва WARN. Открито при живия AD тест.
+- **RADIUS CoA трябва да е подписан.** Request Authenticator = MD5(header+16
+  нули+attrs+secret); без него FreeRADIUS дропва пакета тихо, а драйверът мисли,
+  че е успял. CoA адресът е host(Server):CoAPort, не Server:CoAPort. Отговорът
+  се чете и валидира (NAK/грешен secret = грешка).
+- **Воден знак се вгражда винаги, не само при дълъг текст.** `embedZeroWidth`
+  слага всичките 16 бита (между думите + остатъка накрая), иначе къс документ
+  остава непроследим, а операторът не разбира.
 - **Breadcrumbs пише на чужда машина — затова не разрушава.** Никога не
   презаписва съществуващ файл (O_EXCL за нови, fenced append за съществуващи);
   всеки crumb носи регистриран honeytoken (не истинска тайна); манифест пази
