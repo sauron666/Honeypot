@@ -1,0 +1,78 @@
+# MIRAGE — Windows AD decoy, за тест на реална Windows машина
+#
+# Това е НАШИЯТ AD honeypot (по-добър от външния скрипт): истински Kerberos KDC
+# с crackable AS-REP/kerberoast, фалшива AD директория по LDAP, NetNTLMv2 улов
+# по SMB — всичко емулирано в един .exe, без да инсталира нищо в системата и без
+# да набира навън. Слага се на реалните AD портове, за да го хитват офанзивните
+# инструменти без пренасочване.
+#
+# Пускане (elevated PowerShell, в разархивираната папка):
+#   .\mirage-director.exe --config profiles\windows-ad-test.yaml
+# Конзолата: http://127.0.0.1:8422
+#
+# ВАЖНО за портовете на Windows:
+#   88 (Kerberos) и 389 (LDAP) са свободни на member/standalone сървър — връзват
+#   се направо. 445 (SMB) го държи услугата "Server" (LanmanServer); ако искаш и
+#   SMB улова, спри я първо:  Stop-Service LanmanServer -Force
+#   иначе просто закоментирай smb услугата по-долу — Kerberos тестът не зависи от нея.
+
+tenant: default
+site: ad-test
+
+data_dir: C:\ProgramData\MIRAGE\ad-test
+
+api:
+  # Конзолата — само локално на машината.
+  listen: 127.0.0.1:8422
+
+honeyd:
+  # 0.0.0.0 → приема от мрежата, за да можеш да пуснеш инструментите и отвън.
+  bind: 0.0.0.0
+  max_session_duration: 30m
+
+  decoys:
+    - id: dcy-dc01
+      persona: windows/dc
+      services:
+        # Фалшивата AD директория. BloodHound/ldapsearch/adfind четат оттук.
+        - service: ldap
+          port: 389
+
+        # Истинският KDC. Точно това, което kerbrute/Rubeus/GetNPUsers удрят.
+        # Декларира се два пъти — клиентите пробват UDP и падат към TCP.
+        - service: kerberos
+          port: 88
+          protocol: tcp
+        - service: kerberos
+          port: 88
+          protocol: udp
+
+        # NetNTLMv2 улов. Изисква да е спряна услугата Server (виж горе);
+        # закоментирай този блок, ако не искаш да пипаш 445.
+        - service: smb
+          port: 445
+
+        # Приемник за honeytoken callback-ите.
+        - service: tokens
+          port: 8081
+
+engagement:
+  idle_timeout: 30m
+
+alerts:
+  min_severity: high
+  sinks:
+    - driver: stdout
+    - driver: file
+      config:
+        path: alerts.jsonl
+
+tokens:
+  base_url: http://127.0.0.1:8081
+
+storage:
+  memory_window: 200000
+  sync_every: 1
+
+drivers:
+  compute: inproc
