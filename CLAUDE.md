@@ -28,7 +28,10 @@ wiring, domain resolver от compute драйвера, Observe горутини 
 сигнали през ingest, DumpMemory (vmi-dump-memory / xl dump-core), crypto hook
 (apimon/BCryptEncrypt→T1486), Probe за Xen dom0 (/proc/xen/capabilities + xl),
 API endpoint-и (GET /api/observer, POST /api/observer/{id}/dump), GUI секция.
-**Остава само валидация на истински Xen dom0 хост с DRAKVUF.**
+**Парсерът е валидиран срещу DRAKVUF v1.1 сорс код** (jsonfmt.h) — TimeStamp
+е quoted string, UserId е int, filedelete2 е текущият plugin. libvmi и
+vmi-dump-memory работят на Xen 4.17 HVM domU. **За пълна DRAKVUF интроспекция
+е нужен CPU с VMFUNC** (altp2m) — i3-9100T го няма.
 
 **GUI** — 13-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
 full-OS VMs, detection rules, evidence chain, compliance, **observer/VMI**,
@@ -216,6 +219,15 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
   обратното: `stopAllObservers()` преди `Farm.Close()`.
 - **Crypto hook (apimon) е critical, не high.** Криптиране вътре в примамка
   без легитимен потребител е ransomware, докато не се докаже друго. T1486.
+- **DRAKVUF иска VMFUNC (altp2m), не само VT-x.** `xl dmesg` показва
+  `VMFUNC` и `#VE` като отделни CPU feature-и. i3-9100T (Coffee Lake-S)
+  ги няма, въпреки че има EPT. Без altp2m DRAKVUF не може да постави
+  shadow page table hooks. libvmi и vmi-dump-memory работят и без VMFUNC.
+- **DRAKVUF TimeStamp е quoted string, не bare float.** `jsonfmt.h` печата
+  `'"' << tv_sec << '.' << padded_usec << '"'`. Go's `encoding/json` декодира
+  quoted число като string, не float64 — custom UnmarshalJSON е задължителен.
+- **DRAKVUF няма UserName — полето е UserId (int).** `get_common_data()` в
+  jsonfmt.h emit-ва `UserId` (числов UID/SID), не текстово потребителско име.
 
 ---
 
@@ -246,12 +258,17 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
 4. ~~**VMI observer — hypervisor glue**~~ ✓ — пълен glue: config→app wiring,
    domain resolver, Observe горутини, DumpMemory (vmi-dump-memory/xl), crypto
    hook (apimon→T1486), Xen Probe (/proc/xen + xl), API endpoint-и, GUI секция.
-   13 теста. **Остава само валидация на Xen dom0 с DRAKVUF.**
+   14 теста. **Парсерът е валидиран срещу DRAKVUF v1.1 сорс.**
 
-   **Важно за средата:** DRAKVUF изисква **Xen**. Наличният Proxmox е **KVM/QEMU**
-   (PVE 8.4), значи там пълните VM примамки работят (proxmox драйвер — готов), но
-   agentless наблюдението през DRAKVUF иска отделен Xen dom0. За KVM алтернативата
-   е libvmi над QEMU — отделна писта, не блокира VM примамките.
+   **Xen валидация (2026-08-30):** Xen 4.17 инсталиран на Proxmox хоста като
+   dual-boot. libvmi компилиран, `vmi-process-list` и `vmi-dump-memory` работят
+   срещу HVM domU. DRAKVUF v1.1 компилиран, но **не може да тръгне** — CPU
+   (i3-9100T) няма VMFUNC за altp2m. Парсерът е валидиран срещу сорс кода:
+   поправени TimeStamp (quoted string), UserId (int вместо UserName), filedelete2.
+
+   **Важно за средата:** DRAKVUF изисква **Xen + CPU с VMFUNC** (altp2m).
+   Наличният i3-9100T го няма. VM примамките работят на Proxmox (KVM/QEMU),
+   но agentless VMI иска Xen dom0 на CPU с EPT+VMFUNC (Haswell+, не всички).
 5. **mirage-vault** — RFC3161 timestamps, signed evidence packages.
 6. **Multi-tenancy, SSO/SAML** — за MSSP канала.
 7. **Plugin SDK** — gRPC, HashiCorp go-plugin модел.
