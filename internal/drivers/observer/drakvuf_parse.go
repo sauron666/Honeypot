@@ -29,13 +29,14 @@ import (
 // naming only what is used keeps the parser from breaking when a DRAKVUF
 // release adds a field, which they do often.
 type drakvufLine struct {
-	Plugin      string          `json:"Plugin"`
-	TimeStamp   drakvufTime_raw `json:"TimeStamp"`
-	ProcessName string          `json:"ProcessName"`
-	UserId      int             `json:"UserId"`
-	PID         int             `json:"PID"`
-	PPID        int             `json:"PPID"`
-	TID         int             `json:"TID"`
+	Plugin         string          `json:"Plugin"`
+	TimeStamp      drakvufTime_raw `json:"TimeStamp"`
+	ProcessName    string          `json:"ProcessName"`
+	RunningProcess string          `json:"RunningProcess"`
+	UserId         int             `json:"UserId"`
+	PID            int             `json:"PID"`
+	PPID           int             `json:"PPID"`
+	TID            int             `json:"TID"`
 
 	// procmon
 	ExitStatus  *int   `json:"ExitStatus"`
@@ -96,10 +97,14 @@ func ParseDrakvufLine(decoyID string, raw []byte) (drivers.Sighting, bool) {
 		return drivers.Sighting{}, false
 	}
 
+	proc := l.ProcessName
+	if proc == "" {
+		proc = l.RunningProcess
+	}
 	s := drivers.Sighting{
 		DecoyID: decoyID,
 		Time:    drakvufTimeVal(float64(l.TimeStamp)),
-		Process: l.ProcessName,
+		Process: proc,
 		PID:     l.PID,
 		PPID:    l.PPID,
 		User:    strconv.Itoa(l.UserId),
