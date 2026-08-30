@@ -16,7 +16,15 @@
 
 Работещ продукт в профил P0 („honeypot в кутия"): един бинар вдига примамки,
 записва всичко в tamper-evident chain, стичва го в engagement-и, вдига аларми
-и го показва в операторска конзола. ~34 900 реда Go, ~10 000 от тях тестове. 21 тестови пакета.
+и го показва в комерсиална операторска конзола. ~40 200 реда Go, ~10 000 от
+тях тестове. 29 тестови пакета.
+
+**Proxmox REST API драйвер** работи дистанционно (без pvesh) — ticket auth и
+API token. Cloud-init Ubuntu 24.04 шаблон (VMID 9000) създаден на PVE 8.4.
+
+**GUI** — 12-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
+full-OS VMs, detection rules, evidence chain, compliance, presence, config, status.
+32 REST endpoint-а (8 нови: compliance, graph, topology, VM start/stop, system, fingerprint).
 
 **Платформи:** компилира се и минава тестове на Linux и Windows. На Windows
 Unix file permissions не се проверяват (не съществуват); тестовете го пропускат
@@ -36,7 +44,7 @@ make build
 | `internal/store` | append-only JSONL evidence, resume след рестарт, стрийм проверка |
 | `internal/bus` | шина, NATS-съвместим subject matching; `Close()` изчаква handler-ите |
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
-| `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
+| `internal/drivers/compute` | `inproc`, `podman`, `libvirt`, `proxmox` (REST API + pvesh CLI fallback) |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog`, `elastic` (ECS), `splunk` (HEC) |
 | `internal/driverset` | регистрация на вградените драйвери (отделен пакет заради import cycle) |
 | `internal/honeyd` | фермата: 15 протокола, персони, виртуална ФС, shell, reconcile |
@@ -50,10 +58,10 @@ make build
 | `internal/app` | сглобяването на едно място (бинарът и e2e тестовете ползват него) |
 | `internal/presence` | overlay: хъб + Presence Agent, тунел с мултиплексиране, взаимен TLS + собствен CA (`ca.go`) |
 | `internal/life` | синтетичен живот: детерминистичен график на логини/логове/lastLogon като функция на времето; примамката изглежда все по-обитаема при всяка проверка |
-| `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn |
+| `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn, start/stop |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
 | `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI; parsing/mapping готово и тествано, hypervisor-glue остава — виж ADR-010) |
-| `internal/api` | REST + вградена конзола (`internal/api/web/`) |
+| `internal/api` | REST (32 endpoint-а) + вградена конзола (`internal/api/web/` — 12-секционен SPA) |
 | `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
 | `internal/drivers/nac` | `none` (честен no-op) + `freeradius` (RADIUS CoA — насочва непознато устройство към deception VLAN вместо да го блокира) |
 | `internal/graph` | `mirage-graph` — attack-path deception; поставя примамки по вероятните пътища на атаката |
@@ -186,6 +194,12 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
 - **TLS ръкостискането се прави явно в `serveAgent`.** Оставено на първия
   `Read`, проблем със сертификат излиза като „връзката не започна с hello",
   което праща човека, който вдига mTLS, точно в грешната посока.
+- **Proxmox REST API ticket-ът изтича.** `pveAPI.authenticate()` кешира
+  ticket-а за 90 минути и го обновява автоматично. При API token auth не се
+  изисква refresh. `verify_tls: false` по подразбиране (self-signed PVE certs).
+- **GUI-ят не ползва innerHTML.** Всичко е `textContent` / `el()` helper.
+  Атакуващият контролира командите, user agent-ите и пътищата, които се
+  показват — XSS в операторската конзола би бил катастрофален.
 
 ---
 
@@ -209,18 +223,20 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
 
 ## 5. Какво следва (по приоритет)
 
-1. **Образи за VM примамките** — платформата е готова (`internal/farm`,
-   профил P4), но MIRAGE клонира готови libvirt шаблони, не ги строи.
-   Липсва packer/cloud-init рецепта и `proxmox` драйвер.
-2. **Life Engine** — синтетични потребители, които поддържат примамката жива
-   (логове, lastLogon, нови файлове) докато атакуващият я гледа.
+1. ~~**Образи за VM примамките**~~ ✓ — cloud-init Ubuntu 24.04 шаблон
+   (`templates/ubuntu2404-cloud/build-template.sh`), тестван на PVE 8.4.
+2. ~~**Proxmox драйвер**~~ ✓ — REST API клиент, работи дистанционно.
+3. ~~**Комерсиален GUI**~~ ✓ — 12-секционен SPA, 32 API endpoint-а.
 4. **VMI observer — hypervisor glue.** Parsing (`ParseDrakvufLine`), mapping
    (`SightingToEvent`) и стрийм цикълът са готови и тествани без хардуер.
    Остава само Xen-glue: decoy→домейн резолвер, валидация на `drakvuf` спускането,
    `DumpMemory`, crypto hook, wiring в `app.go`. Пълен план: `docs/adr/ADR-010`.
    **Това се довършва на Xen dom0 хост** (напр. през Windows VS Code plugin към
    машина с хипервайзор).
-5. **`mirage-graph`** — attack path deception; изисква реална среда за профилиране.
+5. **mirage-vault** — RFC3161 timestamps, signed evidence packages.
+6. **Multi-tenancy, SSO/SAML** — за MSSP канала.
+7. **Plugin SDK** — gRPC, HashiCorp go-plugin модел.
+8. **Допълнителни compute драйвери** — vSphere, Hyper-V (Phase 5).
 
 Отхвърлени съзнателно (виж `docs/11-IDEAS.md`): hack-back, автоматично
 блокиране на IP към прод firewall, cloud-only контролер.
