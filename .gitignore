@@ -25,3 +25,9 @@ presence-pki/
 *.crt
 *.pem
 /dist/
+
+# stray root build artifacts (binaries build to bin/ via make)
+/miragectl
+/mirage-director
+/mirage-presence
+/mirage-breadcrumbs
