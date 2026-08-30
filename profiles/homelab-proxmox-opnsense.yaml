@@ -4,16 +4,15 @@
 # firewall, an isolated deception VLAN and a small Active Directory.
 #
 # Network layout (zone names are abstractions; the fabric driver maps them):
-#   ZONE PROD   VLAN 10   real network
-#   ZONE MGMT   VLAN 20   hypervisor, firewall, MIRAGE control plane
-#   ZONE DIRTY  VLAN 666  decoys, with no route to PROD or MGMT
-#   ZONE XFER   VLAN 667  one-way site controller -> director
+#   ZONE PROD   vmbr0   real network (192.168.1.0/24)
+#   ZONE MGMT   vmbr0   hypervisor, firewall, MIRAGE control plane
+#   ZONE DIRTY  vmbr1   decoys, with no route to PROD or MGMT
 #
 # The decoys below still run in-process (compute: inproc), which is the right
 # starting point: put the box in VLAN 666 with a single interface, redirect the
 # real ports to the unprivileged ones, and you have a full decoy segment without
-# a single VM. Move to compute: libvirt or proxmox when you want full-OS decoys
-# with agentless introspection.
+# a single VM. Move to compute: proxmox when you want full-OS decoys with
+# agentless introspection.
 
 tenant: homelab
 site: sofia-lab
@@ -21,14 +20,13 @@ site: sofia-lab
 data_dir: /var/lib/mirage
 
 api:
-  # Management interface only: this address must live in MGMT, never in DIRTY.
-  listen: 10.20.0.5:8422
-  token: change-me
-  public_url: https://mirage.lab.internal
+  # Management interface: accessible from the LAN.
+  listen: 0.0.0.0:8422
+  # token: change-me   # uncomment in production
+  public_url: http://192.168.1.100:8422
 
 honeyd:
-  # Bind to the decoy-segment interface.
-  bind: 10.66.0.10
+  bind: 0.0.0.0
   max_session_duration: 45m
   max_conns_per_ip: 40
   max_conns_total: 4000
@@ -40,19 +38,45 @@ honeyd:
         - {service: ssh,    port: 2222}
         - {service: http,   port: 8080}
         - {service: ftp,    port: 2121}
+        - {service: telnet, port: 2323}
+        - {service: smtp,   port: 2525}
+        - {service: tokens, port: 8081}
 
     - id: dcy-db01
       persona: linux/db
       services:
         - {service: ssh,   port: 2223}
         - {service: redis, port: 6380}
+        - {service: mysql, port: 3307}
+        - {service: mssql, port: 14330}
 
     - id: dcy-nas01
       persona: linux/backup
       services:
         - {service: ssh,    port: 2224}
         - {service: ftp,    port: 2122}
-        - {service: telnet, port: 2323}
+        - {service: vnc,    port: 5901}
+        - {service: snmp,   port: 1161}
+
+    - id: dcy-fs01
+      persona: linux/fileserver
+      services:
+        - {service: ftp, port: 2123}
+        - {service: ssh, port: 2225}
+        - {service: smb, port: 4445}
+
+    - id: dcy-dc01
+      persona: windows/dc
+      services:
+        - {service: ldap,     port: 3389}
+        - {service: smb,      port: 4446}
+        - {service: kerberos, port: 8888, proto: tcp}
+        - {service: kerberos, port: 8888, proto: udp}
+
+    - id: dcy-plc01
+      persona: linux/backup
+      services:
+        - {service: modbus, port: 5020}
 
 engagement:
   idle_timeout: 30m
@@ -63,15 +87,13 @@ alerts:
     - driver: file
       config:
         path: alerts.jsonl
-    # Ship to the lab SIEM. Wazuh and Elastic both read this happily.
-    - driver: syslog
-      config:
-        address: 10.20.0.20:514
-        network: udp
-    # And to chat, so somebody actually sees it.
-    # - driver: webhook
+    - driver: stdout
+      config: {}
+    # Uncomment for syslog forwarding to a SIEM:
+    # - driver: syslog
     #   config:
-    #     url: https://hooks.example.invalid/mirage
+    #     address: 192.168.1.20:514
+    #     network: udp
 
 storage:
   memory_window: 500000
@@ -79,3 +101,25 @@ storage:
 
 drivers:
   compute: inproc
+
+  # Proxmox compute driver for full-OS VM decoys (P4 profile).
+  # Uncomment to manage VMs on the local Proxmox node.
+  # compute: proxmox
+  # compute_config:
+  #   url: "https://192.168.1.100:8006"
+  #   user: "root@pam"
+  #   password: "change-me"
+  #   node: "proxmox"
+  #   pool: "mirage"
+  #   verify_tls: false
+
+# Full-OS VM decoys (uncomment when compute: proxmox is active)
+# vms:
+#   containment: enforced
+#   decoys:
+#     - id: vm-web01
+#       persona: linux/web
+#       template: "9000"       # VMID of cloud-init Ubuntu template
+#       cpus: 2
+#       memory_mb: 1024
+#       revert: on_engagement_end

@@ -343,6 +343,63 @@ func (p *Provisioner) assertContainment(ctx context.Context) error {
 	return nil
 }
 
+// Start brings a stopped decoy back up. It refuses to start a burned decoy:
+// that is evidence, not a host to recycle.
+func (p *Provisioner) Start(ctx context.Context, id string) error {
+	p.mu.Lock()
+	s := p.state[id]
+	if s == nil {
+		p.mu.Unlock()
+		return ErrNotProvisioned
+	}
+	if s.burned {
+		p.mu.Unlock()
+		return fmt.Errorf("farm: %s is burned and is evidence; it is not restarted", id)
+	}
+	spec := s.spec
+	p.mu.Unlock()
+
+	if err := p.opt.Compute.Start(ctx, id); err != nil {
+		return fmt.Errorf("farm: start %s: %w", id, err)
+	}
+
+	p.mu.Lock()
+	s.status.State = drivers.StateRunning
+	p.mu.Unlock()
+
+	p.emit(event.SeverityInformational, spec, "full-OS decoy started by operator")
+	return nil
+}
+
+// Stop gracefully stops a running decoy without burning it. The decoy can be
+// started again later. For permanent take-down with evidence preservation, use
+// Burn instead.
+func (p *Provisioner) Stop(ctx context.Context, id string) error {
+	p.mu.Lock()
+	s := p.state[id]
+	if s == nil {
+		p.mu.Unlock()
+		return ErrNotProvisioned
+	}
+	if s.burned {
+		p.mu.Unlock()
+		return fmt.Errorf("farm: %s is already burned; use Burn for permanent take-down", id)
+	}
+	spec := s.spec
+	p.mu.Unlock()
+
+	if err := p.opt.Compute.Stop(ctx, id); err != nil {
+		return fmt.Errorf("farm: stop %s: %w", id, err)
+	}
+
+	p.mu.Lock()
+	s.status.State = drivers.StateStopped
+	p.mu.Unlock()
+
+	p.emit(event.SeverityInformational, spec, "full-OS decoy stopped by operator")
+	return nil
+}
+
 // Burn takes a decoy out of service and preserves it.
 //
 // It is what happens when the evidence says an attacker owns the host: the

@@ -7,14 +7,32 @@ MIRAGE клонира готови шаблони, не ги строи от н�
 
 | Директория | Персона | Какво е |
 |---|---|---|
-| `debian12-web/` | linux/web | Debian 12 + nginx + PHP; уеб портал |
+| `ubuntu2404-cloud/` | linux/* | Ubuntu 24.04 cloud-init; универсален шаблон за клониране |
+| `debian12-web/` | linux/web | Debian 12 + nginx + PHP; уеб портал (Packer) |
 | `debian12-fileserver/` | linux/fileserver | Debian 12 + Samba; файлов сървър с canary share |
 | `win2022-dc/` | windows/dc | Windows Server 2022 + AD DS; домейн контролер (бъдещо) |
 
 ## Как се строи
 
+### Ubuntu 24.04 cloud-init (препоръчван)
+
+Най-бързият начин — не изисква Packer, сваля cloud image и го
+конвертира в шаблон директно на Proxmox нода:
+
 ```bash
-# Proxmox
+ssh root@proxmox bash < templates/ubuntu2404-cloud/build-template.sh
+```
+
+Или с environment variables:
+
+```bash
+VMID=9000 STORAGE=local-lvm BRIDGE=vmbr1 \
+  ssh root@proxmox bash < templates/ubuntu2404-cloud/build-template.sh
+```
+
+### Debian 12 (Packer)
+
+```bash
 packer build -var "proxmox_url=https://pve:8006/api2/json" \
              -var "proxmox_token=root@pam!mirage=YOUR-TOKEN" \
              -var "proxmox_node=pve" \

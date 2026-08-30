@@ -17,18 +17,21 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/sauron666/Honeypot/internal/alert"
 	"github.com/sauron666/Honeypot/internal/assure"
+	"github.com/sauron666/Honeypot/internal/compliance"
 	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/farm"
 	"github.com/sauron666/Honeypot/internal/forge"
+	"github.com/sauron666/Honeypot/internal/graph"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/presence"
 	"github.com/sauron666/Honeypot/internal/store"
@@ -120,6 +123,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/tokens", s.mintToken)
 	s.mux.HandleFunc("DELETE /api/tokens/{id}", s.deleteToken)
 	s.mux.HandleFunc("GET /api/tokens/{id}/docx", s.tokenDocx)
+	s.mux.HandleFunc("GET /api/compliance/{framework}", s.complianceReport)
+	s.mux.HandleFunc("GET /api/graph", s.graphAnalysis)
+	s.mux.HandleFunc("GET /api/topology", s.topology)
+	s.mux.HandleFunc("POST /api/vms/{id}/start", s.vmStart)
+	s.mux.HandleFunc("POST /api/vms/{id}/stop", s.vmStop)
+	s.mux.HandleFunc("POST /api/fingerprint", s.runFingerprint)
+	s.mux.HandleFunc("GET /api/system", s.systemInfo)
 
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -494,8 +504,11 @@ func (s *Server) presenceAgents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// vmList reports the full-OS decoys.
 func (s *Server) economics(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Tracker == nil {
+		writeJSON(w, http.StatusOK, engagement.Economics{})
+		return
+	}
 	econ := s.deps.Tracker.Economics()
 	writeJSON(w, http.StatusOK, econ)
 }
@@ -543,10 +556,15 @@ func (s *Server) vmAction(w http.ResponseWriter, r *http.Request, action string)
 	}
 
 	var err error
-	if action == "burn" {
+	switch action {
+	case "burn":
 		err = s.deps.VMs.Burn(r.Context(), id, body.Reason)
-	} else {
+	case "revert":
 		err = s.deps.VMs.Revert(r.Context(), id, body.Reason)
+	case "start":
+		err = s.deps.VMs.Start(r.Context(), id)
+	case "stop":
+		err = s.deps.VMs.Stop(r.Context(), id)
 	}
 	if errors.Is(err, farm.ErrNotProvisioned) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -775,5 +793,363 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
 		"verified": true, "events": st.Events,
 		"head_seq": st.HeadSeq, "head_hash": st.HeadHash,
 		"took": time.Since(start).Round(time.Millisecond).String(),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Compliance
+// ---------------------------------------------------------------------------
+
+// complianceReport generates an audit report for one regulatory framework.
+//
+// Frameworks: nis2, dora, iso27001, pci, soc2, iec62443.
+// Returns the controls, their satisfaction status, and a coverage percentage.
+func (s *Server) complianceReport(w http.ResponseWriter, r *http.Request) {
+	fw := r.PathValue("framework")
+
+	// Map URL slugs to the framework names the compliance package uses.
+	allowed := map[string]string{
+		"nis2":     "NIS2",
+		"dora":     "DORA",
+		"iso27001": "ISO 27001:2022",
+		"pci":      "PCI DSS 4.0",
+		"soc2":     "SOC 2",
+		"iec62443": "IEC 62443",
+	}
+	canonical, ok := allowed[fw]
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "unknown framework: " + fw + "; supported: nis2, dora, iso27001, pci, soc2, iec62443",
+		})
+		return
+	}
+
+	cap := s.buildCapabilities()
+	all := compliance.Audit(cap)
+
+	// Filter to the requested framework.
+	var controls []compliance.Control
+	for _, c := range all {
+		if c.Framework == canonical {
+			controls = append(controls, c)
+		}
+	}
+
+	passed := 0
+	for _, c := range controls {
+		if c.Satisfied {
+			passed++
+		}
+	}
+	var coverage float64
+	if len(controls) > 0 {
+		coverage = float64(passed) / float64(len(controls)) * 100
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"framework": canonical,
+		"controls":  controls,
+		"passed":    passed,
+		"total":     len(controls),
+		"coverage":  coverage,
+	})
+}
+
+// buildCapabilities inspects the running deployment to build the capability
+// descriptor the compliance package needs.
+func (s *Server) buildCapabilities() compliance.Capabilities {
+	cap := compliance.Capabilities{
+		HasHashChain: true, // the store is always an append-only hash chain
+	}
+	if s.deps.Farm != nil {
+		bound := s.deps.Farm.Bound()
+		cap.HasDecoys = len(bound) > 0
+		cap.DecoyCount = len(bound)
+		// Check for specific protocol capabilities.
+		for _, l := range bound {
+			switch l.Service {
+			case "kerberos":
+				cap.HasKerberos = true
+			}
+		}
+		cap.HasRansomware = true // the FTP service includes the ransomware engine
+	}
+	if s.deps.Tracker != nil {
+		active, closed := s.deps.Tracker.Stats()
+		cap.HasEngagements = true
+		cap.EngagementCount = active + closed
+		cap.HasEconomics = true
+	}
+	if s.deps.Dispatcher != nil {
+		cap.HasAlerts = true
+		sent, _, _ := s.deps.Dispatcher.Stats()
+		cap.AlertCount = int(sent)
+	}
+	if s.deps.Tokens != nil {
+		cap.HasTokens = true
+		cap.HasBreadcrumbs = true
+	}
+	if s.deps.Presence != nil {
+		cap.HasOverlay = true
+	}
+	if s.deps.VMs != nil {
+		cap.HasVMFarm = true
+	}
+	// Forge and assure are always available when the binary is running.
+	cap.HasForge = true
+	cap.HasAssure = s.deps.Farm != nil
+	cap.HasFingerprint = s.deps.Farm != nil
+
+	if s.deps.Registry != nil {
+		for _, info := range s.deps.Registry.Available() {
+			if info.Kind == drivers.KindSink {
+				cap.SinkCount++
+			}
+			if info.Kind == drivers.KindFabric {
+				cap.FabricDriver = info.Name
+			}
+		}
+	}
+
+	st := s.deps.Store.Stats()
+	cap.EvidenceFile = fmt.Sprintf("%d events, head seq %d", st.Events, st.HeadSeq)
+	cap.DeploymentDate = s.deps.StartedAt
+	return cap
+}
+
+// ---------------------------------------------------------------------------
+// Graph — attack path analysis
+// ---------------------------------------------------------------------------
+
+// graphAnalysis computes attack path coverage from the estate model.
+//
+// The graph is POSTed as JSON in the request body when the operator wants to
+// analyze a specific topology. A GET with no body returns an empty analysis
+// with instructions.
+func (s *Server) graphAnalysis(w http.ResponseWriter, r *http.Request) {
+	// The graph is built from a manifest the operator uploads, not from live
+	// scanning (see package graph doc). Accept it as a query parameter pointing
+	// to a pre-loaded estate, or from the request body for ad-hoc analysis.
+	//
+	// For a GET endpoint, accept the estate as a JSON query parameter or return
+	// an empty scaffold when nothing is supplied.
+
+	estate := r.URL.Query().Get("estate")
+	if estate == "" {
+		// Return the current deployment's decoy info so the UI can build
+		// a partial graph.
+		var decoyNodes []graph.Node
+		var decoys []graph.Decoy
+		if s.deps.Farm != nil {
+			for _, l := range s.deps.Farm.Bound() {
+				decoyNodes = append(decoyNodes, graph.Node{
+					ID:   l.DecoyID,
+					Type: "server",
+					Tags: map[string]string{"service": l.Service, "persona": l.Persona},
+				})
+				decoys = append(decoys, graph.Decoy{
+					ID:      l.DecoyID,
+					AtNode:  l.DecoyID,
+					Service: l.Service,
+				})
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"message":     "supply an estate model as JSON to /api/graph via POST, or use the query parameter 'estate'",
+			"decoy_nodes": decoyNodes,
+			"decoys":      decoys,
+		})
+		return
+	}
+
+	var e graph.Estate
+	if err := json.Unmarshal([]byte(estate), &e); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid estate JSON: " + err.Error()})
+		return
+	}
+
+	g, err := graph.Build(e)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	cov := g.Analyze()
+	suggestions := g.Suggest(5)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"coverage":    cov,
+		"suggestions": suggestions,
+		"nodes":       e.Nodes,
+		"edges":       e.Edges,
+		"decoys":      e.Decoys,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Topology — network topology for visualization
+// ---------------------------------------------------------------------------
+
+// topology builds a network topology view from the running deployment's state:
+// decoys, VMs, presence agents, and the hub.
+func (s *Server) topology(w http.ResponseWriter, r *http.Request) {
+	type topoNode struct {
+		ID    string `json:"id"`
+		Label string `json:"label"`
+		Type  string `json:"type"` // "decoy", "vm", "agent", "hub", "director"
+		Group string `json:"group,omitempty"`
+		IP    string `json:"ip,omitempty"`
+	}
+	type topoEdge struct {
+		From    string `json:"from"`
+		To      string `json:"to"`
+		Label   string `json:"label,omitempty"`
+		Service string `json:"service,omitempty"`
+	}
+
+	var nodes []topoNode
+	var edges []topoEdge
+
+	// The director is the center of the star.
+	nodes = append(nodes, topoNode{
+		ID: "director", Label: "MIRAGE Director", Type: "director",
+	})
+
+	// Decoys from the farm.
+	seen := map[string]bool{}
+	if s.deps.Farm != nil {
+		for _, l := range s.deps.Farm.Bound() {
+			if seen[l.DecoyID] {
+				// Already added as a node; just add another service edge.
+				edges = append(edges, topoEdge{
+					From: "director", To: l.DecoyID,
+					Service: l.Service, Label: l.Service,
+				})
+				continue
+			}
+			seen[l.DecoyID] = true
+			host, _, _ := net.SplitHostPort(l.Address)
+			nodes = append(nodes, topoNode{
+				ID: l.DecoyID, Label: l.DecoyID,
+				Type: "decoy", Group: l.Persona, IP: host,
+			})
+			edges = append(edges, topoEdge{
+				From: "director", To: l.DecoyID,
+				Service: l.Service, Label: l.Service,
+			})
+		}
+	}
+
+	// Full-OS VM decoys.
+	if s.deps.VMs != nil {
+		for _, vm := range s.deps.VMs.Status() {
+			id := "vm:" + vm.ID
+			ip := ""
+			if len(vm.IPs) > 0 {
+				ip = vm.IPs[0]
+			}
+			nodes = append(nodes, topoNode{
+				ID: id, Label: vm.ID,
+				Type: "vm", Group: vm.Persona, IP: ip,
+			})
+			edges = append(edges, topoEdge{
+				From: "director", To: id, Label: vm.State,
+			})
+		}
+	}
+
+	// Presence overlay agents.
+	if s.deps.Presence != nil {
+		nodes = append(nodes, topoNode{
+			ID: "hub", Label: "Presence Hub", Type: "hub",
+			IP: s.deps.Presence.Addr(),
+		})
+		edges = append(edges, topoEdge{
+			From: "director", To: "hub", Label: "overlay",
+		})
+		for _, a := range s.deps.Presence.Agents() {
+			id := "agent:" + a.ID
+			nodes = append(nodes, topoNode{
+				ID: id, Label: a.ID, Type: "agent",
+			})
+			edges = append(edges, topoEdge{
+				From: "hub", To: id, Label: "tunnel",
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes": nodes, "edges": edges,
+		"count_nodes": len(nodes), "count_edges": len(edges),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// VM start / stop
+// ---------------------------------------------------------------------------
+
+func (s *Server) vmStart(w http.ResponseWriter, r *http.Request) {
+	s.vmAction(w, r, "start")
+}
+
+func (s *Server) vmStop(w http.ResponseWriter, r *http.Request) {
+	s.vmAction(w, r, "stop")
+}
+
+// ---------------------------------------------------------------------------
+// System information
+// ---------------------------------------------------------------------------
+
+// systemInfo returns system-level details for the operator dashboard: version,
+// uptime, runtime, driver registry, and evidence chain stats.
+func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
+	// Driver registry status.
+	var driverList []map[string]any
+	if s.deps.Registry != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		probeResults := s.deps.Registry.ProbeAll(ctx)
+		for _, info := range s.deps.Registry.Available() {
+			key := string(info.Kind) + ":" + info.Name
+			status := "ok"
+			errStr := ""
+			if err, probed := probeResults[key]; probed && err != nil {
+				status = "error"
+				errStr = err.Error()
+			}
+			entry := map[string]any{
+				"name":         info.Name,
+				"kind":         info.Kind,
+				"summary":      info.Summary,
+				"capabilities": info.Capabilities,
+				"experimental": info.Experimental,
+				"probe_status": status,
+			}
+			if errStr != "" {
+				entry["probe_error"] = errStr
+			}
+			driverList = append(driverList, entry)
+		}
+	}
+
+	// Evidence chain stats.
+	st := s.deps.Store.Stats()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"product":    version.Product,
+		"version":    version.Version,
+		"commit":     version.Commit,
+		"build_date": version.BuildDate,
+		"go_version": runtime.Version(),
+		"os":         runtime.GOOS,
+		"arch":       runtime.GOARCH,
+		"uptime":     time.Since(s.deps.StartedAt).Round(time.Second).String(),
+		"started_at": s.deps.StartedAt.UTC().Format(time.RFC3339),
+		"tenant":     s.deps.Tenant,
+		"site":       s.deps.Site,
+		"drivers":    driverList,
+		"evidence":   st,
+		"num_cpus":   runtime.NumCPU(),
+		"goroutines": runtime.NumGoroutine(),
 	})
 }
