@@ -98,8 +98,14 @@ func ParseDrakvufLine(decoyID string, raw []byte) (drivers.Sighting, bool) {
 	}
 
 	proc := l.ProcessName
-	if proc == "" {
+	// A RunningProcess field (with no triggered ProcessName) is DRAKVUF's
+	// process *listing* -- a snapshot of what was already running, which on a
+	// Linux guest is the only thing DRAKVUF emits. It is inventory, not an
+	// attacker action, so it must not be mistaken for a launched process.
+	isListing := false
+	if proc == "" && l.RunningProcess != "" {
 		proc = l.RunningProcess
+		isListing = true
 	}
 	s := drivers.Sighting{
 		DecoyID: decoyID,
@@ -118,10 +124,14 @@ func ParseDrakvufLine(decoyID string, raw []byte) (drivers.Sighting, bool) {
 	case "procmon":
 		s.Kind = "process"
 		s.CommandLine = l.CommandLine
-		if l.ExitStatus != nil {
+		switch {
+		case isListing:
+			// Inventory of an already-running process, seen at attach time.
+			s.Action = "listed"
+		case l.ExitStatus != nil:
 			s.Action = "exit"
 			s.Detail["exit_status"] = strconv.Itoa(*l.ExitStatus)
-		} else {
+		default:
 			s.Action = "exec"
 		}
 		s.Target = l.CommandLine

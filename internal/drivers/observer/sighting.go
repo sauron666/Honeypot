@@ -41,6 +41,12 @@ func SightingToEvent(s drivers.Sighting, tenant, site, persona string) *event.Ev
 				techniques = append(techniques,
 					event.Technique{Tactic: "TA0007", Technique: "T1057", Name: "Process Discovery"})
 			}
+		} else if s.Action == "listed" {
+			// A process that was already running when the observer attached.
+			// Inventory, not an intrusion -- recorded quietly so the timeline
+			// is complete without drowning the evidence in a startup flood.
+			sev = event.SeverityInformational
+			msg = "process running in decoy (inventory): " + processLabel(s)
 		} else {
 			sev = event.SeverityLow
 			msg = "process exited in decoy: " + processLabel(s)

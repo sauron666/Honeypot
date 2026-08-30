@@ -293,3 +293,41 @@ func hasTech(e *event.Event, id string) bool {
 	}
 	return false
 }
+
+func TestRunningProcessListingIsInventoryNotAnAlert(t *testing.T) {
+	// On a Linux guest DRAKVUF emits a RunningProcess listing of everything
+	// already running when it attaches. Mapping each of those as a launched
+	// process would flood the evidence with false HIGH alerts at every start.
+	line := `{"Plugin":"procmon","TimeStamp":"1710000000.0","RunningProcess":"/usr/sbin/sshd","PID":812}`
+	s, ok := ParseDrakvufLine("vm-fs01", []byte(line))
+	if !ok {
+		t.Fatal("a RunningProcess listing did not parse")
+	}
+	if s.Action != "listed" {
+		t.Fatalf("a process listing was classified as %q, not inventory", s.Action)
+	}
+	if s.Process != "/usr/sbin/sshd" {
+		t.Fatalf("the listed process name was lost: %q", s.Process)
+	}
+	e := SightingToEvent(s, "t", "s", "linux/fileserver")
+	if e.SeverityID != event.SeverityInformational {
+		t.Fatalf("a process inventory entry was recorded at severity %d, want informational", e.SeverityID)
+	}
+	if len(e.Mirage.Attack) != 0 {
+		t.Fatal("a process inventory entry was mapped to an ATT&CK technique; it is not an attack")
+	}
+}
+
+func TestTriggeredExecStillHighAfterListingFix(t *testing.T) {
+	// A real triggered exec (ProcessName present, Windows-style) must still be
+	// the high-signal event it was -- the listing fix must not dull it.
+	line := `{"Plugin":"procmon","TimeStamp":"1710000001.0","ProcessName":"powershell.exe","PID":9,"CommandLine":"whoami /all"}`
+	s, _ := ParseDrakvufLine("vm-dc01", []byte(line))
+	if s.Action != "exec" {
+		t.Fatalf("a triggered exec was misclassified as %q", s.Action)
+	}
+	e := SightingToEvent(s, "t", "s", "windows/dc")
+	if e.SeverityID != event.SeverityHigh {
+		t.Fatalf("a triggered exec dropped to severity %d", e.SeverityID)
+	}
+}
