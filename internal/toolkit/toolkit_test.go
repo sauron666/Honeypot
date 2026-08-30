@@ -91,6 +91,47 @@ func TestDatabaseIsNotEmpty(t *testing.T) {
 	}
 }
 
+func TestWildcardIndicatorMatches(t *testing.T) {
+	db := New()
+	matches := db.Identify(map[string]string{
+		"technique":   "T1059",
+		"payload_url": "http://evil.com/shell.exe",
+	}, 5)
+	if !containsTool(matches, "Metasploit") {
+		t.Fatalf("Metasploit not identified with wildcard payload_url, got %v", toolNames(matches))
+	}
+}
+
+func TestNoMatchReturnsEmpty(t *testing.T) {
+	db := New()
+	matches := db.Identify(map[string]string{"technique": "T9999"}, 100)
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches for unknown technique, got %v", toolNames(matches))
+	}
+}
+
+func TestSignaturesReturnsDefensiveCopy(t *testing.T) {
+	db := New()
+	a := db.Signatures()
+	origLen := len(a)
+	a = append(a, Signature{Name: "evil"})
+	b := db.Signatures()
+	if len(b) != origLen {
+		t.Fatalf("mutating returned slice affected DB: len went from %d to %d", origLen, len(b))
+	}
+}
+
+func TestCaseInsensitiveMatch(t *testing.T) {
+	db := New()
+	matches := db.Identify(map[string]string{
+		"technique": "t1558.003",
+		"etype":     "23",
+	}, 2)
+	if !containsTool(matches, "Rubeus") {
+		t.Fatalf("case-insensitive match failed, got %v", toolNames(matches))
+	}
+}
+
 func containsTool(matches []Match, name string) bool {
 	for _, m := range matches {
 		if m.Tool.Name == name {

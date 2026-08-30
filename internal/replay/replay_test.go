@@ -91,3 +91,77 @@ func TestDurationTracksLastEvent(t *testing.T) {
 		t.Fatal("an empty recording has zero duration")
 	}
 }
+
+func TestEventCountMatchesRecordedEvents(t *testing.T) {
+	r := NewAt(time.Unix(1710000000, 0))
+	if r.EventCount() != 0 {
+		t.Fatal("empty recording has non-zero event count")
+	}
+	r.OutputAt(0.1, "$ ")
+	r.InputAt(0.2, "id\r")
+	r.OutputAt(0.3, "uid=0(root)\r\n")
+	if got := r.EventCount(); got != 3 {
+		t.Fatalf("EventCount = %d, want 3", got)
+	}
+}
+
+func TestSummaryFormatAndContent(t *testing.T) {
+	r := NewAt(time.Unix(1710000000, 0))
+	r.OutputAt(0.5, "hello")
+	r.InputAt(4.0, "cmd")
+	s := r.Summary()
+	if s != "2 events, 4.0 seconds" {
+		t.Fatalf("Summary = %q, want %q", s, "2 events, 4.0 seconds")
+	}
+}
+
+func TestDefaultDimensionsWhenZeroOrNegative(t *testing.T) {
+	r := NewAt(time.Unix(1710000000, 0))
+	r.OutputAt(0.1, "x")
+	out := r.Asciinema(0, -1, "")
+	sc := bufio.NewScanner(strings.NewReader(out))
+	sc.Scan()
+	var hdr map[string]any
+	if err := json.Unmarshal(sc.Bytes(), &hdr); err != nil {
+		t.Fatal(err)
+	}
+	if hdr["width"].(float64) != 120 || hdr["height"].(float64) != 40 {
+		t.Fatalf("default dimensions wrong: %v x %v", hdr["width"], hdr["height"])
+	}
+}
+
+func TestEmptyTitleIsOmittedFromHeader(t *testing.T) {
+	r := NewAt(time.Unix(1710000000, 0))
+	out := r.Asciinema(80, 24, "")
+	sc := bufio.NewScanner(strings.NewReader(out))
+	sc.Scan()
+	var hdr map[string]any
+	json.Unmarshal(sc.Bytes(), &hdr)
+	if _, ok := hdr["title"]; ok {
+		t.Fatal("empty title should not appear in header")
+	}
+}
+
+func TestEmptyRecordingProducesHeaderOnly(t *testing.T) {
+	r := NewAt(time.Unix(1710000000, 0))
+	out := r.Asciinema(80, 24, "")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("empty recording should produce 1 line (header), got %d", len(lines))
+	}
+}
+
+func TestSpecialCharactersInPayload(t *testing.T) {
+	r := NewAt(time.Unix(1710000000, 0))
+	r.OutputAt(0.1, "\x1b[31mred\x1b[0m")
+	r.OutputAt(0.2, "quote: \"hello\"")
+	r.OutputAt(0.3, "null: \x00 tab: \t")
+	out := r.Asciinema(80, 24, "test")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for i, l := range lines[1:] {
+		var ev []any
+		if err := json.Unmarshal([]byte(l), &ev); err != nil {
+			t.Fatalf("event %d with special chars is not valid JSON: %v", i, err)
+		}
+	}
+}

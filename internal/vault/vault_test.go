@@ -136,6 +136,44 @@ func TestHeadDigestBindsSeqAndHash(t *testing.T) {
 	}
 }
 
+func TestWriteAndReadSealRoundTrip(t *testing.T) {
+	kp, _ := GenerateKeypair()
+	seal := kp.SealHead("acme", "hq", 100, "cafebabe", time.Now())
+	path := filepath.Join(t.TempDir(), "seal.json")
+	if err := WriteSeal(seal, path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadSeal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.HeadHash != seal.HeadHash || loaded.HeadSeq != seal.HeadSeq {
+		t.Fatal("seal fields changed after write/read")
+	}
+	if err := VerifySeal(loaded); err != nil {
+		t.Fatalf("loaded seal does not verify: %v", err)
+	}
+}
+
+func TestFingerprintHexMatchesFingerprint(t *testing.T) {
+	kp, _ := GenerateKeypair()
+	seal := kp.SealHead("t", "s", 1, "h", time.Now())
+	fromPub := Fingerprint(kp.Public)
+	fromHex := FingerprintHex(seal.PublicKey)
+	if fromPub != fromHex {
+		t.Fatalf("Fingerprint(%x) = %q, FingerprintHex(%s) = %q", kp.Public, fromPub, seal.PublicKey, fromHex)
+	}
+}
+
+func TestFingerprintHexInvalidKey(t *testing.T) {
+	if got := FingerprintHex("not-hex"); got != "invalid-key" {
+		t.Fatalf("FingerprintHex(bad) = %q, want invalid-key", got)
+	}
+	if got := FingerprintHex("aabb"); got != "invalid-key" {
+		t.Fatalf("FingerprintHex(short) = %q, want invalid-key", got)
+	}
+}
+
 func statPerm(t *testing.T, path string) uint32 {
 	t.Helper()
 	fi, err := os.Stat(path)

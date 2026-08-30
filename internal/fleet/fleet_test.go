@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,5 +84,58 @@ func TestDeferredRespectsActiveEngagements(t *testing.T) {
 	}
 	if Deferred(active, "dcy-idle") {
 		t.Fatal("rotation was deferred for a decoy with no engagement")
+	}
+}
+
+func TestGenerationAdvancesWithTime(t *testing.T) {
+	ids := []string{"dcy-web01"}
+	p := plan()
+	t1 := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
+	t2 := t1.Add(p.Interval)
+	a := Schedule(p, ids, t1)
+	b := Schedule(p, ids, t2)
+	if len(a) > 0 && len(b) > 0 && a[0].Hostname == b[0].Hostname {
+		t.Fatal("one full interval later should produce a different hostname")
+	}
+}
+
+func TestEmptyDecoyListReturnsNil(t *testing.T) {
+	now := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
+	got := Schedule(plan(), nil, now)
+	if len(got) != 0 {
+		t.Fatalf("nil decoy list returned %d identities, want 0", len(got))
+	}
+	got = Schedule(plan(), []string{}, now)
+	if len(got) != 0 {
+		t.Fatalf("empty decoy list returned %d identities, want 0", len(got))
+	}
+}
+
+func TestAllExcludedReturnsEmpty(t *testing.T) {
+	now := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
+	ids := []string{"dcy-a", "dcy-b", "dcy-c"}
+	p := plan()
+	p.Exclude = ids
+	got := Schedule(p, ids, now)
+	if len(got) != 0 {
+		t.Fatalf("all-excluded returned %d identities, want 0", len(got))
+	}
+}
+
+func TestHostnameFormat(t *testing.T) {
+	now := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
+	ids := []string{"dcy-web01", "dcy-db01", "dcy-dc01"}
+	got := Schedule(plan(), ids, now)
+	for _, d := range got {
+		if d.Hostname == "" {
+			t.Fatal("empty hostname")
+		}
+		upper := strings.ToUpper(d.Hostname)
+		if d.Hostname != upper {
+			t.Fatalf("hostname %q is not uppercase", d.Hostname)
+		}
+		if !strings.Contains(d.Hostname, "-") {
+			t.Fatalf("hostname %q has no dash separator", d.Hostname)
+		}
 	}
 }

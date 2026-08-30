@@ -16,8 +16,8 @@
 
 Работещ продукт в профил P0 („honeypot в кутия"): един бинар вдига примамки,
 записва всичко в tamper-evident chain, стичва го в engagement-и, вдига аларми
-и го показва в комерсиална операторска конзола. ~41 000 реда Go, ~11 000 от
-тях тестове. 30 тестови пакета.
+и го показва в комерсиална операторска конзола. ~42 300 реда Go, ~12 500 от
+тях тестове (399 тестови функции). 32 тестови пакета.
 
 **Proxmox REST API драйвер** работи дистанционно (без pvesh) — ticket auth,
 API token, TLS fingerprint pinning. Cloud-init Ubuntu 24.04 шаблон (VMID 9000)
@@ -87,7 +87,7 @@ make build
 | `internal/replay` | SSH session replay в asciinema v2 формат |
 | `internal/vault` | подписани доказателства: ed25519 seal на chain head + RFC 3161 trusted timestamp; прави веригата проверима от трета страна (съд/одитор) |
 | `internal/drivers/compute` (proxmox) | добавен `proxmox` драйвер към `inproc`/`podman`/`libvirt` |
-| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите. `miragectl` изкарва всичко: doctor/plan/apply/verify/events/forge/tokens/assure/fingerprint/vms/presence-ca/economics + **export/compliance/insider/fleet/graph/toolkit/watermark/replay** |
+| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите. `miragectl` изкарва всичко: doctor/plan/apply/verify/events/forge/tokens/assure/fingerprint/vms/presence-ca/economics + **export/compliance/insider/fleet/graph/toolkit/watermark/replay/vault** |
 
 ### Протоколи (`internal/honeyd/svc_*.go`)
 
