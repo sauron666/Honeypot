@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/sauron666/Honeypot/internal/alert"
@@ -20,6 +21,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/bus"
 	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/drivers"
+	"github.com/sauron666/Honeypot/internal/drivers/observer"
 	"github.com/sauron666/Honeypot/internal/driverset"
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
@@ -45,10 +47,15 @@ type App struct {
 	Presence *presence.Hub
 	// VMs provisions full-OS decoys, when the deployment declares any.
 	VMs *farm.Provisioner
+	// Observer watches inside full-OS decoys from the hypervisor, when
+	// configured. Sightings are fed through ingest like any other event.
+	Observer drivers.ObserverDriver
 
-	log     *slog.Logger
-	started time.Time
-	sweepCh chan struct{}
+	log        *slog.Logger
+	started    time.Time
+	sweepCh    chan struct{}
+	observesMu sync.Mutex
+	observes   map[string]context.CancelFunc // decoyID → cancel for Observe goroutine
 }
 
 // New assembles a deployment from configuration. Nothing binds a port until
@@ -185,6 +192,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		Apply:    a.ApplyListeners,
 		Presence: a.Presence,
 		VMs:      a.VMs,
+		Observer: a.Observer,
 		Tenant:   cfg.Tenant, Site: cfg.Site,
 		StartedAt: a.started, Log: log, Token: cfg.API.Token,
 	})
@@ -245,14 +253,112 @@ func (a *App) buildVMFarm(cfg *config.Config, log *slog.Logger) error {
 	}
 	for _, d := range cfg.VMs.Decoys {
 		if d.Revert == farm.RevertOnEngagementEnd && !a.VMs.CanRevert() {
-			// Better to say it now than to discover after an intrusion that the
-			// reset the manifest promised was never possible.
 			log.Warn("a full-OS decoy asks to be reset after each engagement, but this compute "+
 				"driver cannot snapshot; it will stay as the attacker left it",
 				"decoy", d.ID, "driver", name)
 		}
 	}
+
+	if cfg.Drivers.Observer != "" {
+		if err := a.buildObserver(cfg, compute, log); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// buildObserver opens the observer driver and wires the decoy→domain resolver
+// from the compute driver. The resolver is how the observer knows which Xen
+// domain to attach to when given a MIRAGE decoy id.
+func (a *App) buildObserver(cfg *config.Config, compute drivers.ComputeDriver, log *slog.Logger) error {
+	obs, err := a.Registry.Observer(cfg.Drivers.Observer, cfg.Drivers.ObserverConfig)
+	if err != nil {
+		return fmt.Errorf("app: observer driver %q: %w", cfg.Drivers.Observer, err)
+	}
+	if err := obs.Probe(context.Background()); err != nil {
+		log.Warn("observer driver is not usable on this host; "+
+			"VM decoys will run without inside-the-guest observation",
+			"driver", cfg.Drivers.Observer, "err", err)
+		return nil
+	}
+	// Wire the domain resolver for DRAKVUF: decoy id → (Xen domain, profile).
+	if d, ok := obs.(*observer.Drakvuf); ok {
+		d.SetDomainResolver(func(decoyID string) (string, string, error) {
+			st, err := compute.Status(context.Background(), decoyID)
+			if err != nil {
+				return "", "", fmt.Errorf("observer: cannot resolve decoy %q to a domain: %w", decoyID, err)
+			}
+			return st.Handle, "", nil
+		})
+	}
+	a.Observer = obs
+	a.observes = make(map[string]context.CancelFunc)
+	log.Info("observer driver ready", "driver", cfg.Drivers.Observer,
+		"capabilities", obs.Info().Capabilities)
+	return nil
+}
+
+// startObserving launches an Observe stream for a VM decoy. Each sighting is
+// converted to an OCSF event and fed through ingest, so it joins the evidence
+// chain and the engagement tracker like any emulated-service event.
+func (a *App) startObserving(decoyID, persona string) {
+	if a.Observer == nil {
+		return
+	}
+	a.observesMu.Lock()
+	if _, running := a.observes[decoyID]; running {
+		a.observesMu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.observes[decoyID] = cancel
+	a.observesMu.Unlock()
+
+	ch, err := a.Observer.Observe(ctx, decoyID)
+	if err != nil {
+		cancel()
+		if !errors.Is(err, drivers.ErrObserveUnsupported) {
+			a.log.Warn("could not attach observer to VM decoy",
+				"decoy", decoyID, "err", err)
+		}
+		a.observesMu.Lock()
+		delete(a.observes, decoyID)
+		a.observesMu.Unlock()
+		return
+	}
+	a.log.Info("observing inside VM decoy", "decoy", decoyID)
+	go func() {
+		defer func() {
+			a.observesMu.Lock()
+			delete(a.observes, decoyID)
+			a.observesMu.Unlock()
+		}()
+		for s := range ch {
+			e := observer.SightingToEvent(s, a.Config.Tenant, a.Config.Site, persona)
+			a.ingest(ctx, e, true)
+		}
+	}()
+}
+
+// stopObserving cancels the Observe stream for a decoy.
+func (a *App) stopObserving(decoyID string) {
+	a.observesMu.Lock()
+	cancel, ok := a.observes[decoyID]
+	a.observesMu.Unlock()
+	if ok {
+		cancel()
+		a.log.Info("stopped observing VM decoy", "decoy", decoyID)
+	}
+}
+
+// stopAllObservers cancels every running Observe stream.
+func (a *App) stopAllObservers() {
+	a.observesMu.Lock()
+	for id, cancel := range a.observes {
+		cancel()
+		delete(a.observes, id)
+	}
+	a.observesMu.Unlock()
 }
 
 // ApplyListeners reconciles the running farm with a new listener set.
@@ -323,8 +429,6 @@ func (a *App) Start(ctx context.Context) error {
 		return err
 	}
 	if a.VMs != nil {
-		// Before the emulated farm goes live is the right moment: if
-		// containment cannot be verified, nothing should be listening either.
 		changes, err := a.VMs.Reconcile(ctx, a.Config.VMs.Decoys)
 		if err != nil {
 			a.Farm.Close()
@@ -332,6 +436,18 @@ func (a *App) Start(ctx context.Context) error {
 		}
 		for _, c := range changes {
 			a.log.Info("full-OS decoy", "id", c.ID, "action", c.Action, "reason", c.Reason)
+		}
+		// Attach the observer to every running VM decoy.
+		if a.Observer != nil {
+			personaOf := map[string]string{}
+			for _, d := range a.Config.VMs.Decoys {
+				personaOf[d.ID] = d.Persona
+			}
+			for _, st := range a.VMs.Status() {
+				if st.State == string(drivers.StateRunning) {
+					a.startObserving(st.ID, personaOf[st.ID])
+				}
+			}
 		}
 	}
 	if a.Presence != nil {
@@ -383,6 +499,7 @@ func (a *App) sweepLoop(ctx context.Context) {
 // Stop shuts everything down in dependency order and flushes the evidence file.
 func (a *App) Stop(ctx context.Context) error {
 	close(a.sweepCh)
+	a.stopAllObservers()
 	if err := a.API.Shutdown(ctx); err != nil {
 		a.log.Warn("api shutdown", "err", err)
 	}
@@ -390,6 +507,9 @@ func (a *App) Stop(ctx context.Context) error {
 		a.Presence.Close()
 	}
 	a.Farm.Close()
+	if a.Observer != nil {
+		a.Observer.Close()
+	}
 	a.Tracker.Sweep()
 	a.Bus.Close()
 	a.Registry.Close()

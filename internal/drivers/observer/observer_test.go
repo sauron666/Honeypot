@@ -206,6 +206,47 @@ func TestDrakvufDeclaresAgentless(t *testing.T) {
 	}
 }
 
+func TestParsesCryptoAPIHook(t *testing.T) {
+	line := `{"Plugin":"apimon","TimeStamp":1710000005,"ProcessName":"ransomware.exe",` +
+		`"PID":9000,"API":"BCryptEncrypt","KeyHex":"aabbccdd","Alg":"AES-256"}`
+	s, ok := ParseDrakvufLine("vm-dc01", []byte(line))
+	if !ok {
+		t.Fatal("an apimon/crypto line did not parse")
+	}
+	if s.Kind != "crypto" || s.Action != "encrypt" {
+		t.Fatalf("wrong classification: %+v", s)
+	}
+	if s.Target != "BCryptEncrypt" {
+		t.Fatalf("target should be the API name: %q", s.Target)
+	}
+	if s.Detail["key_hex"] != "aabbccdd" {
+		t.Fatalf("key not captured: %+v", s.Detail)
+	}
+	e := SightingToEvent(s, "t", "s", "windows/dc")
+	if e.SeverityID != event.SeverityCritical {
+		t.Fatalf("crypto interception should be critical, got %d", e.SeverityID)
+	}
+	if !hasTech(e, "T1486") {
+		t.Fatal("crypto hook was not mapped to T1486 (Data Encrypted for Impact)")
+	}
+}
+
+func TestUnmappedApimonIsSkipped(t *testing.T) {
+	line := `{"Plugin":"apimon","TimeStamp":1710000006,"ProcessName":"svchost.exe",` +
+		`"PID":700,"API":"NtCreateFile"}`
+	if _, ok := ParseDrakvufLine("vm", []byte(line)); ok {
+		t.Fatal("a non-crypto apimon event should be skipped")
+	}
+}
+
+func TestProbeFailsOnNonXenHost(t *testing.T) {
+	d, _ := NewDrakvuf(nil)
+	err := d.(*Drakvuf).Probe(context.Background())
+	if err == nil {
+		t.Skip("this host has drakvuf on PATH, or /proc/xen — skipping")
+	}
+}
+
 func hasTech(e *event.Event, id string) bool {
 	for _, t := range e.Mirage.Attack {
 		if t.Technique == id {

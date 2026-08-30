@@ -88,6 +88,13 @@ func SightingToEvent(s drivers.Sighting, tenant, site, persona string) *event.Ev
 		techniques = append(techniques,
 			event.Technique{Tactic: "TA0005", Technique: "T1014", Name: "Rootkit"})
 
+	case "crypto":
+		class = event.ClassProcessActivity
+		sev = event.SeverityCritical
+		msg = "crypto API intercepted in decoy: " + s.Target
+		techniques = append(techniques,
+			event.Technique{Tactic: "TA0040", Technique: "T1486", Name: "Data Encrypted for Impact"})
+
 	default:
 		class = event.ClassProcessActivity
 		sev = event.SeverityLow

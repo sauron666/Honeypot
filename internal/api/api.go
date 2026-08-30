@@ -17,6 +17,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -59,7 +61,9 @@ type Deps struct {
 	// Presence is the overlay hub, when one is configured.
 	Presence *presence.Hub
 	// VMs provisions full-OS decoys, when the deployment declares any.
-	VMs       *farm.Provisioner
+	VMs *farm.Provisioner
+	// Observer watches inside full-OS decoys from the hypervisor.
+	Observer  drivers.ObserverDriver
 	Tenant    string
 	Site      string
 	StartedAt time.Time
@@ -130,6 +134,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/vms/{id}/stop", s.vmStop)
 	s.mux.HandleFunc("POST /api/fingerprint", s.runFingerprint)
 	s.mux.HandleFunc("GET /api/system", s.systemInfo)
+	s.mux.HandleFunc("GET /api/observer", s.observerStatus)
+	s.mux.HandleFunc("POST /api/observer/{id}/dump", s.observerDump)
 
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -1151,5 +1157,54 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"evidence":   st,
 		"num_cpus":   runtime.NumCPU(),
 		"goroutines": runtime.NumGoroutine(),
+	})
+}
+
+// observerStatus reports the observer driver's status and capabilities.
+func (s *Server) observerStatus(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Observer == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"configured": false,
+			"driver":     "none",
+			"message":    "no observer driver configured; VM decoys run without inside-the-guest observation",
+		})
+		return
+	}
+	info := s.deps.Observer.Info()
+	probErr := ""
+	if err := s.deps.Observer.Probe(r.Context()); err != nil {
+		probErr = err.Error()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"configured":   true,
+		"driver":       info.Name,
+		"capabilities": info.Capabilities,
+		"experimental": info.Experimental,
+		"probe_error":  probErr,
+		"summary":      info.Summary,
+	})
+}
+
+// observerDump triggers a memory dump of a VM decoy.
+func (s *Server) observerDump(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Observer == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "no observer driver configured",
+		})
+		return
+	}
+	id := r.PathValue("id")
+	outPath := filepath.Join(s.deps.RunningConfig.DataDir, "dumps", id+"-"+time.Now().Format("20060102-150405")+".raw")
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o750); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.deps.Observer.DumpMemory(r.Context(), id, outPath); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"decoy": id,
+		"path":  outPath,
 	})
 }

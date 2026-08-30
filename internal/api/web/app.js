@@ -22,6 +22,7 @@ var NAV = [
   { id: 'forge',       icon: '△', label: 'Detection Rules' },
   { id: 'evidence',    icon: '●', label: 'Evidence Chain' },
   { id: 'compliance',  icon: '✓', label: 'Compliance' },
+  { id: 'observer',    icon: '◈', label: 'Observer / VMI' },
   { id: 'presence',    icon: '⊕', label: 'Presence' },
   { id: 'config',      icon: '⊡', label: 'Configuration' },
   { id: 'about',       icon: '⊙', label: 'About / Status' },
@@ -220,6 +221,7 @@ var VIEWS = {
   forge:       viewForge,
   evidence:    viewEvidence,
   compliance:  viewCompliance,
+  observer:    viewObserver,
   presence:    viewPresence,
   config:      viewConfig,
   about:       viewAbout,
@@ -1580,6 +1582,95 @@ function viewCompliance(c) {
 }
 
 // ================================================================
+// VIEW: OBSERVER / VMI
+// ================================================================
+
+function viewObserver(c) {
+  return tryApi('/api/observer').then(function (data) {
+    c.replaceChildren();
+    c.appendChild(el('h2', null, 'Observer / VMI'));
+
+    if (!data || !data.configured) {
+      var msg = el('div', 'empty-state');
+      msg.appendChild(el('div', 'empty-icon', '◈'));
+      msg.appendChild(el('div', null, 'No observer driver configured.'));
+      msg.appendChild(el('p', null,
+        'The observer watches inside full-OS VM decoys from the hypervisor — ' +
+        'process, file, registry and injection activity, reconstructed without ' +
+        'anything inside the guest for the attacker to find or disable.'));
+      var hint = el('div', 'help-block');
+      hint.appendChild(el('strong', null, 'To enable:'));
+      hint.appendChild(el('span', null, ' set drivers.observer: drakvuf in your profile and deploy on a Xen dom0 host.'));
+      msg.appendChild(hint);
+      c.appendChild(msg);
+      return;
+    }
+
+    // Status card
+    var grid = el('div', 'section-grid');
+    grid.appendChild(statCard('Driver', data.driver));
+    grid.appendChild(statCard('Status', data.probe_error ? 'Unavailable' : 'Ready'));
+    grid.appendChild(statCard('Experimental', data.experimental ? 'Yes' : 'No'));
+    c.appendChild(grid);
+
+    // Capabilities
+    if (data.capabilities && data.capabilities.length) {
+      c.appendChild(el('h3', null, 'Capabilities'));
+      var capGrid = el('div', 'section-grid');
+      data.capabilities.forEach(function (cap) {
+        var name = cap.replace('observer.', '');
+        capGrid.appendChild(statCard(name, '✓'));
+      });
+      c.appendChild(capGrid);
+    }
+
+    // Summary
+    if (data.summary) {
+      c.appendChild(el('h3', null, 'Summary'));
+      c.appendChild(el('p', null, data.summary));
+    }
+
+    // Probe error
+    if (data.probe_error) {
+      c.appendChild(el('h3', null, 'Probe Error'));
+      var errBox = el('pre', 'code-block');
+      errBox.textContent = data.probe_error;
+      c.appendChild(errBox);
+    }
+
+    // VM dump section
+    c.appendChild(el('h3', null, 'Memory Dump'));
+    c.appendChild(el('p', null,
+      'Trigger a full memory dump of a running VM decoy for forensic analysis.'));
+    var form = el('div', 'form-row');
+    var inp = el('input');
+    inp.type = 'text';
+    inp.placeholder = 'VM decoy ID (e.g. vm-dc01)';
+    inp.style.cssText = 'flex:1;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--fg)';
+    form.appendChild(inp);
+    var dumpBtn = el('button', 'btn btn-warn', 'Dump Memory');
+    dumpBtn.addEventListener('click', function () {
+      var id = inp.value.trim();
+      if (!id) { toast('Enter a decoy ID', 'err'); return; }
+      dumpBtn.disabled = true;
+      dumpBtn.textContent = 'Dumping...';
+      api('/api/observer/' + encodeURIComponent(id) + '/dump', { method: 'POST' })
+        .then(function (res) {
+          toast('Memory dump saved: ' + res.path, 'ok');
+          dumpBtn.disabled = false;
+          dumpBtn.textContent = 'Dump Memory';
+        })
+        .catch(function (e) {
+          toast('Dump failed: ' + e.message, 'err');
+          dumpBtn.disabled = false;
+          dumpBtn.textContent = 'Dump Memory';
+        });
+    });
+    form.appendChild(dumpBtn);
+    c.appendChild(form);
+  });
+}
+
 // VIEW: PRESENCE (overlay)
 // ================================================================
 

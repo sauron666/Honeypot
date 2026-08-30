@@ -55,6 +55,11 @@ type drakvufLine struct {
 
 	// ssdt / rootkit-ish
 	SyscallName string `json:"SyscallName"`
+
+	// crypto hooks (BCryptEncrypt/CryptEncrypt interceptions)
+	API    string `json:"API"`
+	KeyHex string `json:"KeyHex"`
+	Alg    string `json:"Alg"`
 }
 
 // ParseDrakvufLine turns one line of DRAKVUF output into a Sighting.
@@ -123,6 +128,22 @@ func ParseDrakvufLine(decoyID string, raw []byte) (drivers.Sighting, bool) {
 		s.Kind = "module"
 		s.Action = "hook"
 		s.Target = l.SyscallName
+
+	case "apimon":
+		api := strings.ToLower(l.API)
+		if strings.Contains(api, "crypt") || strings.Contains(api, "bcrypt") {
+			s.Kind = "crypto"
+			s.Action = "encrypt"
+			s.Target = l.API
+			if l.KeyHex != "" {
+				s.Detail["key_hex"] = l.KeyHex
+			}
+			if l.Alg != "" {
+				s.Detail["algorithm"] = l.Alg
+			}
+		} else {
+			return drivers.Sighting{}, false
+		}
 
 	default:
 		return drivers.Sighting{}, false

@@ -153,11 +153,16 @@ type DriverConfig struct {
 	// Fabric enforces and verifies segmentation. It is required before any
 	// full-OS decoy starts, unless vms.containment says otherwise.
 	Fabric string `yaml:"fabric"`
-	// ComputeConfig and FabricConfig are passed to the named driver verbatim.
-	// The core never knows what a hypervisor URI or a CIDR list means; the
-	// driver does (ADR-008).
-	ComputeConfig map[string]any `yaml:"compute_config"`
-	FabricConfig  map[string]any `yaml:"fabric_config"`
+	// Observer watches inside full-OS decoys from the hypervisor. When set,
+	// app.go attaches an Observe stream to every running VM decoy and feeds
+	// sightings into the evidence chain. "none" is a valid, honest choice.
+	Observer string `yaml:"observer"`
+	// ComputeConfig, FabricConfig and ObserverConfig are passed to the named
+	// driver verbatim. The core never knows what a hypervisor URI or a CIDR
+	// list means; the driver does (ADR-008).
+	ComputeConfig  map[string]any `yaml:"compute_config"`
+	FabricConfig   map[string]any `yaml:"fabric_config"`
+	ObserverConfig map[string]any `yaml:"observer_config"`
 }
 
 // Load reads, expands and validates a configuration file.

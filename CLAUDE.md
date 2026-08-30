@@ -19,12 +19,22 @@
 и го показва в комерсиална операторска конзола. ~40 200 реда Go, ~10 000 от
 тях тестове. 29 тестови пакета.
 
-**Proxmox REST API драйвер** работи дистанционно (без pvesh) — ticket auth и
-API token. Cloud-init Ubuntu 24.04 шаблон (VMID 9000) създаден на PVE 8.4.
+**Proxmox REST API драйвер** работи дистанционно (без pvesh) — ticket auth,
+API token, TLS fingerprint pinning. Cloud-init Ubuntu 24.04 шаблон (VMID 9000)
+създаден на PVE 8.4.
 
-**GUI** — 12-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
-full-OS VMs, detection rules, evidence chain, compliance, presence, config, status.
-32 REST endpoint-а (8 нови: compliance, graph, topology, VM start/stop, system, fingerprint).
+**DRAKVUF observer glue завършен.** Пълният код е готов: config→app→observer
+wiring, domain resolver от compute драйвера, Observe горутини за VM примамки,
+сигнали през ingest, DumpMemory (vmi-dump-memory / xl dump-core), crypto hook
+(apimon/BCryptEncrypt→T1486), Probe за Xen dom0 (/proc/xen/capabilities + xl),
+API endpoint-и (GET /api/observer, POST /api/observer/{id}/dump), GUI секция.
+**Остава само валидация на истински Xen dom0 хост с DRAKVUF.**
+
+**GUI** — 13-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
+full-OS VMs, detection rules, evidence chain, compliance, **observer/VMI**,
+presence, config, status.
+34 REST endpoint-а (10 нови: compliance, graph, topology, VM start/stop, system,
+fingerprint, observer status, observer dump).
 
 **Платформи:** компилира се и минава тестове на Linux и Windows. На Windows
 Unix file permissions не се проверяват (не съществуват); тестовете го пропускат
@@ -60,7 +70,7 @@ make build
 | `internal/life` | синтетичен живот: детерминистичен график на логини/логове/lastLogon като функция на времето; примамката изглежда все по-обитаема при всяка проверка |
 | `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn, start/stop |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
-| `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI; parsing/mapping готово и тествано, hypervisor-glue остава — виж ADR-010) |
+| `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI; пълен glue: config→app wiring, domain resolver, DumpMemory, crypto hook, Xen Probe; валидация на хардуер остава) |
 | `internal/api` | REST (32 endpoint-а) + вградена конзола (`internal/api/web/` — 12-секционен SPA) |
 | `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
 | `internal/drivers/nac` | `none` (честен no-op) + `freeradius` (RADIUS CoA — насочва непознато устройство към deception VLAN вместо да го блокира) |
@@ -200,6 +210,12 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
 - **GUI-ят не ползва innerHTML.** Всичко е `textContent` / `el()` helper.
   Атакуващият контролира командите, user agent-ите и пътищата, които се
   показват — XSS в операторската конзола би бил катастрофален.
+- **Observer-ът се закача след Reconcile, не преди.** VM примамката трябва
+  да е running, преди Observe да пусне DRAKVUF срещу нея. Ако примамката
+  не е вдигната, domainOf ще fail-не и горутината умира. Спирането е
+  обратното: `stopAllObservers()` преди `Farm.Close()`.
+- **Crypto hook (apimon) е critical, не high.** Криптиране вътре в примамка
+  без легитимен потребител е ransomware, докато не се докаже друго. T1486.
 
 ---
 
@@ -226,17 +242,15 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
 1. ~~**Образи за VM примамките**~~ ✓ — cloud-init Ubuntu 24.04 шаблон
    (`templates/ubuntu2404-cloud/build-template.sh`), тестван на PVE 8.4.
 2. ~~**Proxmox драйвер**~~ ✓ — REST API клиент, работи дистанционно.
-3. ~~**Комерсиален GUI**~~ ✓ — 12-секционен SPA, 32 API endpoint-а.
-4. **VMI observer — hypervisor glue.** Parsing (`ParseDrakvufLine`), mapping
-   (`SightingToEvent`) и стрийм цикълът са готови и тествани без хардуер.
-   Остава само Xen-glue: decoy→домейн резолвер, валидация на `drakvuf` спускането,
-   `DumpMemory`, crypto hook, wiring в `app.go`. Пълен план: `docs/adr/ADR-010`.
-   **Това се довършва на Xen dom0 хост** (напр. през Windows VS Code plugin към
-   машина с хипервайзор).
+3. ~~**Комерсиален GUI**~~ ✓ — 13-секционен SPA, 34 API endpoint-а.
+4. ~~**VMI observer — hypervisor glue**~~ ✓ — пълен glue: config→app wiring,
+   domain resolver, Observe горутини, DumpMemory (vmi-dump-memory/xl), crypto
+   hook (apimon→T1486), Xen Probe (/proc/xen + xl), API endpoint-и, GUI секция.
+   13 теста. **Остава само валидация на Xen dom0 с DRAKVUF.**
 
    **Важно за средата:** DRAKVUF изисква **Xen**. Наличният Proxmox е **KVM/QEMU**
    (PVE 8.4), значи там пълните VM примамки работят (proxmox драйвер — готов), но
-   agentless въвеждането през DRAKVUF иска отделен Xen dom0. За KVM алтернативата
+   agentless наблюдението през DRAKVUF иска отделен Xen dom0. За KVM алтернативата
    е libvmi над QEMU — отделна писта, не блокира VM примамките.
 5. **mirage-vault** — RFC3161 timestamps, signed evidence packages.
 6. **Multi-tenancy, SSO/SAML** — за MSSP канала.

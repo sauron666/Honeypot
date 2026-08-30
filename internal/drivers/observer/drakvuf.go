@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/sauron666/Honeypot/internal/drivers"
 )
@@ -73,15 +75,39 @@ func NewDrakvuf(cfg map[string]any) (drivers.Driver, error) {
 func (d *Drakvuf) Info() drivers.Info { return DrakvufInfo() }
 
 // Probe reports honestly whether this host can run DRAKVUF. It is what
-// `miragectl doctor` calls, so a deployment learns at check time -- not during
-// an incident -- that the observer will not work here.
+// `miragectl doctor` calls, so a deployment learns at check time — not during
+// an incident — that the observer will not work here.
 func (d *Drakvuf) Probe(ctx context.Context) error {
 	if _, err := exec.LookPath(d.bin); err != nil {
 		return fmt.Errorf("observer/drakvuf: %q not found on PATH; "+
 			"DRAKVUF needs a Xen dom0 host (see docs/adr/ADR-010-vmi-observer.md)", d.bin)
 	}
-	// A deeper probe (xen present, altp2m available) belongs here once validated
-	// on hardware; reporting the binary's absence is already the common case.
+	if err := probeXen(); err != nil {
+		return fmt.Errorf("observer/drakvuf: %w", err)
+	}
+	return nil
+}
+
+// probeXen checks that this host is a Xen dom0. DRAKVUF cannot work without it.
+func probeXen() error {
+	if _, err := os.Stat("/proc/xen/capabilities"); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("not a Xen host (/proc/xen/capabilities absent); " +
+				"DRAKVUF requires Xen with altp2m — KVM/QEMU hosts need libvmi instead")
+		}
+		return err
+	}
+	caps, err := os.ReadFile("/proc/xen/capabilities")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(caps), "control_d") {
+		return fmt.Errorf("this host runs Xen but is not dom0 (capabilities: %s); "+
+			"DRAKVUF must run in dom0", strings.TrimSpace(string(caps)))
+	}
+	if _, err := exec.LookPath("xl"); err != nil {
+		return fmt.Errorf("xl not found on PATH; the Xen toolstack is required")
+	}
 	return nil
 }
 
@@ -92,10 +118,28 @@ func (d *Drakvuf) Close() error { return nil }
 func (d *Drakvuf) Attach(context.Context, string) error { return nil }
 func (d *Drakvuf) Detach(context.Context, string) error { return nil }
 
-// DumpMemory is not yet wired; it will shell out to drakvuf's memdump or to
-// vmi-dump-memory once validated on hardware.
-func (d *Drakvuf) DumpMemory(context.Context, string, string) error {
-	return fmt.Errorf("observer/drakvuf: memory dump is not yet wired: %w", drivers.ErrObserveUnsupported)
+// DumpMemory saves a full memory snapshot of a VM decoy. It resolves the decoy
+// to its Xen domain and shells out to vmi-dump-memory (libvmi) or, if that is
+// unavailable, to xl dump-core.
+func (d *Drakvuf) DumpMemory(ctx context.Context, decoyID, outPath string) error {
+	domain, _, err := d.domainOf(decoyID)
+	if err != nil {
+		return err
+	}
+	dumpBin := "vmi-dump-memory"
+	if _, err := exec.LookPath(dumpBin); err != nil {
+		dumpBin = "xl"
+	}
+	var cmd *exec.Cmd
+	if dumpBin == "vmi-dump-memory" {
+		cmd = exec.CommandContext(ctx, dumpBin, "-n", domain, outPath)
+	} else {
+		cmd = exec.CommandContext(ctx, dumpBin, "dump-core", domain, outPath)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("observer/drakvuf: memory dump of %q failed: %w\n%s", domain, err, out)
+	}
+	return nil
 }
 
 // Observe resolves the decoy to its Xen domain, launches drakvuf against it, and
