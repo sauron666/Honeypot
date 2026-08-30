@@ -233,6 +233,11 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
    `DumpMemory`, crypto hook, wiring в `app.go`. Пълен план: `docs/adr/ADR-010`.
    **Това се довършва на Xen dom0 хост** (напр. през Windows VS Code plugin към
    машина с хипервайзор).
+
+   **Важно за средата:** DRAKVUF изисква **Xen**. Наличният Proxmox е **KVM/QEMU**
+   (PVE 8.4), значи там пълните VM примамки работят (proxmox драйвер — готов), но
+   agentless въвеждането през DRAKVUF иска отделен Xen dom0. За KVM алтернативата
+   е libvmi над QEMU — отделна писта, не блокира VM примамките.
 5. **mirage-vault** — RFC3161 timestamps, signed evidence packages.
 6. **Multi-tenancy, SSO/SAML** — за MSSP канала.
 7. **Plugin SDK** — gRPC, HashiCorp go-plugin модел.
