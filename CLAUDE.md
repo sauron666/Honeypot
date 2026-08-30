@@ -16,8 +16,8 @@
 
 Работещ продукт в профил P0 („honeypot в кутия"): един бинар вдига примамки,
 записва всичко в tamper-evident chain, стичва го в engagement-и, вдига аларми
-и го показва в комерсиална операторска конзола. ~40 200 реда Go, ~10 000 от
-тях тестове. 29 тестови пакета.
+и го показва в комерсиална операторска конзола. ~41 000 реда Go, ~11 000 от
+тях тестове. 30 тестови пакета.
 
 **Proxmox REST API драйвер** работи дистанционно (без pvesh) — ticket auth,
 API token, TLS fingerprint pinning. Cloud-init Ubuntu 24.04 шаблон (VMID 9000)
@@ -74,7 +74,7 @@ make build
 | `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn, start/stop |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
 | `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI; пълен glue: config→app wiring, domain resolver, DumpMemory, crypto hook, Xen Probe; валидация на хардуер остава) |
-| `internal/api` | REST (32 endpoint-а) + вградена конзола (`internal/api/web/` — 12-секционен SPA) |
+| `internal/api` | REST (34 endpoint-а) + вградена конзола (`internal/api/web/` — 13-секционен SPA); 28 теста: auth, CSP, XSS escape, всеки endpoint без зависимости |
 | `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
 | `internal/drivers/nac` | `none` (честен no-op) + `freeradius` (RADIUS CoA — насочва непознато устройство към deception VLAN вместо да го блокира) |
 | `internal/graph` | `mirage-graph` — attack-path deception; поставя примамки по вероятните пътища на атаката |
