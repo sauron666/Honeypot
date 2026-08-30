@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -93,8 +94,9 @@ func NewProxmox(cfg map[string]any) (drivers.Driver, error) {
 		tokenID := get("token_id", "")
 		tokenSecret := get("token_secret", "")
 		verifyTLS := getBool("verify_tls", false)
+		fingerprint := get("tls_fingerprint", "")
 
-		api, err := newPVEAPI(apiURL, user, password, tokenID, tokenSecret, verifyTLS)
+		api, err := newPVEAPI(apiURL, user, password, tokenID, tokenSecret, verifyTLS, fingerprint)
 		if err != nil {
 			return nil, fmt.Errorf("compute/proxmox: %w", err)
 		}
@@ -376,7 +378,7 @@ type pveAPI struct {
 	pass    string
 }
 
-func newPVEAPI(baseURL, user, password, tokenID, tokenSecret string, verifyTLS bool) (*pveAPI, error) {
+func newPVEAPI(baseURL, user, password, tokenID, tokenSecret string, verifyTLS bool, fingerprint string) (*pveAPI, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid API URL %q: %w", baseURL, err)
@@ -399,13 +401,53 @@ func newPVEAPI(baseURL, user, password, tokenID, tokenSecret string, verifyTLS b
 		client: &http.Client{
 			Timeout: 2 * time.Minute,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: !verifyTLS,
-				},
+				TLSClientConfig: tlsConfigFor(verifyTLS, fingerprint),
 			},
 		},
 	}
 	return api, nil
+}
+
+// tlsConfigFor builds the TLS config for the PVE client.
+//
+// Proxmox ships a self-signed certificate, so full chain verification is off by
+// default and most deployments run that way. That is a real MITM exposure, and
+// the honest fix for a self-signed host is certificate pinning: the PVE API
+// reports each node's SHA-256 as ssl_fingerprint, and pinning it gives the same
+// protection as a CA without needing one. When a fingerprint is configured we
+// verify against it and reject anything else; only with neither a CA nor a
+// fingerprint does the client trust blindly.
+func tlsConfigFor(verifyTLS bool, fingerprint string) *tls.Config {
+	fp := normalizeFingerprint(fingerprint)
+	if fp == "" {
+		return &tls.Config{InsecureSkipVerify: !verifyTLS}
+	}
+	return &tls.Config{
+		InsecureSkipVerify: true, // we do our own check below
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			for _, cert := range cs.PeerCertificates {
+				if normalizeFingerprint(fmt.Sprintf("%x", sha256.Sum256(cert.Raw))) == fp {
+					return nil
+				}
+			}
+			return fmt.Errorf("proxmox: server certificate fingerprint does not match the pinned tls_fingerprint")
+		},
+	}
+}
+
+// normalizeFingerprint strips colons and spaces and lowercases, so a
+// fingerprint copied from the PVE UI (AA:BB:...) matches one computed here.
+func normalizeFingerprint(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'F':
+			b.WriteRune(r + ('a' - 'A'))
+		}
+	}
+	return b.String()
 }
 
 func (a *pveAPI) authenticate(ctx context.Context) error {

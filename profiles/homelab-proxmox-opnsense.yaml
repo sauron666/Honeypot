@@ -111,7 +111,16 @@ drivers:
   #   password: "change-me"
   #   node: "proxmox"
   #   pool: "mirage"
+  #   # Proxmox ships a self-signed certificate. Rather than trusting it blindly
+  #   # (verify_tls: false with no pin is a MITM risk), pin the node's SHA-256 —
+  #   # the PVE UI shows it, or: pvesh get /nodes/<node>/status returns it, and
+  #   # the API's node list carries ssl_fingerprint. With a pin set, a swapped
+  #   # certificate is refused.
   #   verify_tls: false
+  #   tls_fingerprint: "0D:06:D1:2A:9E:FA:48:55:E9:A4:2B:23:23:A1:5C:0F:FB:85:2A:48:E4:FD:AF:DE:53:8E:47:32:26:27:F4:60"
+  #   # For production, prefer an API token over a password:
+  #   # token_id: "mirage@pve!automation"
+  #   # token_secret: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # Full-OS VM decoys (uncomment when compute: proxmox is active)
 # vms:
