@@ -202,7 +202,7 @@ baseline, но първо снимка на мръсното състояние 
 | `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
 | `cmd/mirage-presence` | Presence Agent — поема свободни адреси и тунелира към хъба |
 | `cmd/mirage-breadcrumbs` | **Breadcrumbs агент** — подхвърля следи на реален endpoint (.rdp, ~/.aws, ssh config, история), които водят право в honeynet-а; всяка следа носи honeytoken |
-| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, **presence-ca**, **vms**, status |
+| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, **presence-ca**, **vms**, **vault**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
 (`test/e2e`), всичко под `-race`.

@@ -85,6 +85,7 @@ make build
 | `internal/watermark` | watermarking и проследяване на изтичане на подхвърлено съдържание |
 | `internal/fleet` | авто-ротация на идентичности (чиста функция на времето; отлага при активен engagement, пропуска изгорени) |
 | `internal/replay` | SSH session replay в asciinema v2 формат |
+| `internal/vault` | подписани доказателства: ed25519 seal на chain head + RFC 3161 trusted timestamp; прави веригата проверима от трета страна (съд/одитор) |
 | `internal/drivers/compute` (proxmox) | добавен `proxmox` драйвер към `inproc`/`podman`/`libvirt` |
 | `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите. `miragectl` изкарва всичко: doctor/plan/apply/verify/events/forge/tokens/assure/fingerprint/vms/presence-ca/economics + **export/compliance/insider/fleet/graph/toolkit/watermark/replay** |
 
@@ -269,7 +270,10 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
    **Важно за средата:** DRAKVUF изисква **Xen + CPU с VMFUNC** (altp2m).
    Наличният i3-9100T го няма. VM примамките работят на Proxmox (KVM/QEMU),
    но agentless VMI иска Xen dom0 на CPU с EPT+VMFUNC (Haswell+, не всички).
-5. **mirage-vault** — RFC3161 timestamps, signed evidence packages.
+5. ~~**mirage-vault**~~ ✓ — ed25519 seal на chain head + опционален RFC 3161
+   timestamp (`miragectl vault seal|verify`). Веригата вече е проверима от трета
+   страна: подписът казва „това е от това внедряване", timestamp-ът — „съществуваше
+   тогава". Tamper на файла проваля verify.
 6. **Multi-tenancy, SSO/SAML** — за MSSP канала.
 7. **Plugin SDK** — gRPC, HashiCorp go-plugin модел.
 8. **Допълнителни compute драйвери** — vSphere, Hyper-V (Phase 5).

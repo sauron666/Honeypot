@@ -68,6 +68,7 @@ commands:
   toolkit     identify the attacker's tooling from a recorded engagement
   watermark   embed or extract a per-recipient watermark in text
   replay      reconstruct an SSH session from evidence as an asciinema recording
+  vault       sign the evidence chain head (+ optional RFC 3161 timestamp), and verify a seal
   vms         list full-OS decoys, and burn or reset one during an incident
   status      query a running director over its API
   version     print the version
@@ -127,6 +128,8 @@ func main() {
 		err = watermarkCmd(args)
 	case "replay":
 		err = replayCmd(args)
+	case "vault":
+		err = vaultCmd(args)
 	case "economics":
 		err = economicsCmd(args)
 	case "vms":
