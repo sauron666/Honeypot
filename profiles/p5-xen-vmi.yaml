@@ -1,0 +1,94 @@
+# Profile P5 — full-OS decoys with agentless VMI (Xen + DRAKVUF)
+#
+# This is the deepest MIRAGE deployment: full-OS VM decoys watched from the
+# hypervisor by DRAKVUF, so what an attacker does *inside* a decoy — processes,
+# file deletion, registry, injection — is recorded with nothing inside the guest
+# for them to find or disable. Live-validated on Xen 4.20 (see ADR-010).
+#
+#   miragectl doctor --config profiles/p5-xen-vmi.yaml
+#   mirage-director  --config profiles/p5-xen-vmi.yaml
+#
+# Requires a Xen dom0 on a CPU with VMFUNC/altp2m (Ice Lake or newer; a
+# Coffee-Lake i3-9100T does NOT have it), with DRAKVUF and libvmi installed.
+# See docs/adr/ADR-010-vmi-observer.md for the exact Xen 4.20 setup.
+
+tenant: default
+site: dc-vmi
+
+data_dir: /var/lib/mirage
+
+api:
+  listen: 127.0.0.1:8422
+
+drivers:
+  # Full-OS decoys. On a Xen host these are Xen domains; the observer resolves a
+  # decoy id to its domain through this driver.
+  compute: libvirt
+  compute_config:
+    uri: xen:///system
+
+  fabric: nftables
+  fabric_config:
+    protected: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+    decoy_networks: [10.66.0.0/24]
+
+  # Agentless VMI. drakvuf is experimental until a deployment confirms it on its
+  # own hardware; it degrades honestly (Probe warns, VM decoys still run) when
+  # DRAKVUF or Xen is absent.
+  observer: drakvuf
+  observer_config:
+    drakvuf: /usr/local/bin/drakvuf
+
+vms:
+  containment: verified
+  decoys:
+    # A Windows decoy is what gives full introspection: exec, file-delete,
+    # registry and injection events all come from Windows kernel hooks. A Linux
+    # guest yields only a process listing (DRAKVUF limitation, see ADR-010), so
+    # for deep observation prefer a Windows template with an ISF profile.
+    - id: vm-dc01
+      persona: windows/dc
+      template: ws2022-vmi          # a Windows template with a generated ISF profile
+      cpus: 2
+      memory_mb: 4096
+      segment: dirty
+      revert: on_engagement_end
+
+    # A Linux full-OS decoy still benefits from the file-delete and process
+    # inventory DRAKVUF gives, and from the emulated services on top.
+    - id: vm-fs01
+      persona: linux/fileserver
+      template: debian13-fileserver
+      cpus: 2
+      memory_mb: 2048
+      segment: dirty
+      revert: on_engagement_end
+
+honeyd:
+  bind: 10.66.0.10
+  max_session_duration: 45m
+  decoys:
+    - id: dcy-dc01
+      persona: windows/dc
+      services:
+        - {service: ldap, port: 389}
+        - {service: kerberos, port: 88, protocol: tcp}
+        - {service: kerberos, port: 88, protocol: udp}
+        - {service: smb, port: 445}
+
+engagement:
+  idle_timeout: 30m
+
+alerts:
+  min_severity: high
+  sinks:
+    - driver: stdout
+    - driver: file
+      config: {path: alerts.jsonl}
+
+tokens:
+  base_url: http://10.66.0.10:8081
+
+storage:
+  memory_window: 500000
+  sync_every: 1

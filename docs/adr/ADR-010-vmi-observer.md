@@ -91,6 +91,30 @@ drakvuf -o json -d <domain>        # потвърди формата на изх
 Понеже parsing/mapping е изолиран и тестван, hardware сесията е предимно
 интеграция и валидация, не дизайн.
 
+## Жива валидация (2026-08-30)
+
+DRAKVUF v1.1 **тръгна живо** на реален хардуер: **i5-1035G1 (Ice Lake, VMFUNC ✓)**,
+**Xen 4.20**, Debian 13 dom0. Парсерът е валидиран срещу истинския JSON изход и
+`ParseDrakvufLine` вече го покрива. Ключови находки от живото пускане:
+
+- **Linux guest → само process listing.** DRAKVUF емитира `RunningProcess`
+  (инвентар на вече вървящите процеси), без `ProcessName`/`UserId`/`TID`/
+  `CommandLine`. Тези triggered полета идват от **Windows kernel hooks**
+  (syscall/filetracer плъгините не закачат нищо на Linux → 0 събития). Парсерът
+  третира listing-а като informational инвентар, не като аларма.
+- **За пълна интроспекция** (exec, file delete, registry, injection) е нужен
+  **Windows guest + Windows ISF профил** (генериран с `vmi-win-guid` /
+  volatility срещу самия guest). Това е единствената оставаща стъпка за пълно
+  VMI; изисква Windows VM на Xen.
+- **Xen 4.20 капани:** `altp2m=1` в командния ред (не `=mixed`); domain config
+  `altp2m = "external"` (не `"mixed"`); libvmi config ключ `volatility_ist`
+  (не `json_path`). При crash: vm_event lock → `xl destroy` + `xl create`.
+- **Хардуер:** i3-9100T (Coffee Lake) няма VMFUNC → DRAKVUF не тръгва; Ice Lake+
+  го има. libvmi и `vmi-dump-memory` работят и без VMFUNC.
+
+Остатъчна стъпка за пълно VMI: Windows guest + ISF профил. Всичко останало е
+живо потвърдено.
+
 ## Последици
 
 Deployment без хипервайзор губи нищо — `none` е валиден и честен. Deployment с
