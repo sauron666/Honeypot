@@ -15,8 +15,8 @@ import (
 // actually emits rather than against an idealised format.
 
 func TestParsesProcmonExec(t *testing.T) {
-	line := `{"Plugin":"procmon","TimeStamp":1710000000.123,"ProcessName":"cmd.exe",` +
-		`"UserName":"CORP\\Administrator","PID":4321,"PPID":1000,` +
+	line := `{"Plugin":"procmon","TimeStamp":"1710000000.123000","ProcessName":"cmd.exe",` +
+		`"UserId":500,"PID":4321,"PPID":1000,` +
 		`"CommandLine":"powershell -enc SQBFAFgA"}`
 	s, ok := ParseDrakvufLine("vm-dc01", []byte(line))
 	if !ok {
@@ -40,7 +40,7 @@ func TestParsesProcmonExec(t *testing.T) {
 }
 
 func TestParsesFileDeleteWithDevicePath(t *testing.T) {
-	line := `{"Plugin":"filedelete","TimeStamp":1710000001,"ProcessName":"vssadmin.exe",` +
+	line := `{"Plugin":"filedelete2","TimeStamp":"1710000001.000000","ProcessName":"vssadmin.exe",` +
 		`"PID":5000,"FileName":"\\Device\\HarddiskVolume2\\Users\\bob\\report.docx"}`
 	s, ok := ParseDrakvufLine("vm-fs01", []byte(line))
 	if !ok {
@@ -56,7 +56,7 @@ func TestParsesFileDeleteWithDevicePath(t *testing.T) {
 }
 
 func TestParsesRegistryPersistence(t *testing.T) {
-	line := `{"Plugin":"regmon","TimeStamp":1710000002,"ProcessName":"reg.exe","PID":6000,` +
+	line := `{"Plugin":"regmon","TimeStamp":"1710000002.000000","ProcessName":"reg.exe","PID":6000,` +
 		`"Operation":"RegSetValue","Key":"\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",` +
 		`"ValueName":"Updater"}`
 	s, ok := ParseDrakvufLine("vm-dc01", []byte(line))
@@ -93,7 +93,7 @@ func TestProcessExecIsHighSignalWithIntent(t *testing.T) {
 	// An interactive command inside a decoy is the attacker's hands on a real
 	// machine -- not a routine probe.
 	s, _ := ParseDrakvufLine("vm-dc01", []byte(
-		`{"Plugin":"procmon","TimeStamp":1710000003,"ProcessName":"cmd.exe","PID":1,`+
+		`{"Plugin":"procmon","TimeStamp":"1710000003.000000","ProcessName":"cmd.exe","PID":1,`+
 			`"CommandLine":"whoami /all"}`))
 	e := SightingToEvent(s, "t", "s", "windows/dc")
 	if e.SeverityID != event.SeverityHigh {
@@ -109,7 +109,7 @@ func TestProcessExecIsHighSignalWithIntent(t *testing.T) {
 
 func TestInjectionIsCritical(t *testing.T) {
 	s, _ := ParseDrakvufLine("vm-dc01", []byte(
-		`{"Plugin":"injection","TimeStamp":1710000004,"ProcessName":"rundll32.exe","PID":7,`+
+		`{"Plugin":"injection","TimeStamp":"1710000004.000000","ProcessName":"rundll32.exe","PID":7,`+
 			`"TargetPID":800,"TargetName":"lsass.exe","Method":"CreateRemoteThread"}`))
 	e := SightingToEvent(s, "t", "s", "windows/dc")
 	if e.SeverityID != event.SeverityCritical {
@@ -147,9 +147,9 @@ func TestObserveStreamsParsedSightings(t *testing.T) {
 	d := &Drakvuf{
 		bin: "drakvuf",
 		run: fakeRunner{lines: []string{
-			`{"Plugin":"procmon","TimeStamp":1710000000,"ProcessName":"cmd.exe","PID":1,"CommandLine":"net user"}`,
-			`{"Plugin":"heartbeat"}`, // unmapped, must be skipped silently
-			`{"Plugin":"filedelete","TimeStamp":1710000001,"ProcessName":"x","PID":2,"FileName":"C:\\a.txt"}`,
+			`{"Plugin":"procmon","TimeStamp":"1710000000.000000","ProcessName":"cmd.exe","PID":1,"CommandLine":"net user"}`,
+			`{"Plugin":"heartbeat"}`,
+			`{"Plugin":"filedelete2","TimeStamp":"1710000001.000000","ProcessName":"x","PID":2,"FileName":"C:\\a.txt"}`,
 		}},
 		domainOf: func(id string) (string, string, error) { return "domain-" + id, "profile", nil },
 	}
@@ -207,7 +207,7 @@ func TestDrakvufDeclaresAgentless(t *testing.T) {
 }
 
 func TestParsesCryptoAPIHook(t *testing.T) {
-	line := `{"Plugin":"apimon","TimeStamp":1710000005,"ProcessName":"ransomware.exe",` +
+	line := `{"Plugin":"apimon","TimeStamp":"1710000005.000000","ProcessName":"ransomware.exe",` +
 		`"PID":9000,"API":"BCryptEncrypt","KeyHex":"aabbccdd","Alg":"AES-256"}`
 	s, ok := ParseDrakvufLine("vm-dc01", []byte(line))
 	if !ok {
@@ -232,10 +232,21 @@ func TestParsesCryptoAPIHook(t *testing.T) {
 }
 
 func TestUnmappedApimonIsSkipped(t *testing.T) {
-	line := `{"Plugin":"apimon","TimeStamp":1710000006,"ProcessName":"svchost.exe",` +
+	line := `{"Plugin":"apimon","TimeStamp":"1710000006.000000","ProcessName":"svchost.exe",` +
 		`"PID":700,"API":"NtCreateFile"}`
 	if _, ok := ParseDrakvufLine("vm", []byte(line)); ok {
 		t.Fatal("a non-crypto apimon event should be skipped")
+	}
+}
+
+func TestBareNumericTimestampStillWorks(t *testing.T) {
+	line := `{"Plugin":"procmon","TimeStamp":1710000000.5,"ProcessName":"ls","PID":1,"CommandLine":"ls -la"}`
+	s, ok := ParseDrakvufLine("vm", []byte(line))
+	if !ok {
+		t.Fatal("bare numeric timestamp should still parse")
+	}
+	if s.Time.Year() != 2024 {
+		t.Fatalf("timestamp wrong: %v", s.Time)
 	}
 }
 

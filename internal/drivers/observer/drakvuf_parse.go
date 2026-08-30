@@ -29,18 +29,19 @@ import (
 // naming only what is used keeps the parser from breaking when a DRAKVUF
 // release adds a field, which they do often.
 type drakvufLine struct {
-	Plugin      string  `json:"Plugin"`
-	TimeStamp   float64 `json:"TimeStamp"`
-	ProcessName string  `json:"ProcessName"`
-	UserName    string  `json:"UserName"`
-	PID         int     `json:"PID"`
-	PPID        int     `json:"PPID"`
+	Plugin      string          `json:"Plugin"`
+	TimeStamp   drakvufTime_raw `json:"TimeStamp"`
+	ProcessName string          `json:"ProcessName"`
+	UserId      int             `json:"UserId"`
+	PID         int             `json:"PID"`
+	PPID        int             `json:"PPID"`
+	TID         int             `json:"TID"`
 
 	// procmon
 	ExitStatus  *int   `json:"ExitStatus"`
 	CommandLine string `json:"CommandLine"`
 
-	// filedelete / filetracer
+	// filedelete / filedelete2 / filetracer
 	FileName  string `json:"FileName"`
 	Operation string `json:"Operation"`
 
@@ -62,6 +63,23 @@ type drakvufLine struct {
 	Alg    string `json:"Alg"`
 }
 
+// drakvufTime_raw handles DRAKVUF's TimeStamp field which can be either a bare
+// number (older versions, our unit tests) or a JSON string "seconds.usec"
+// (current DRAKVUF v1.1+). Go's encoding/json decodes a quoted number into a
+// string type, not float64, so a plain float64 field silently breaks on real
+// output.
+type drakvufTime_raw float64
+
+func (t *drakvufTime_raw) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return err
+	}
+	*t = drakvufTime_raw(v)
+	return nil
+}
+
 // ParseDrakvufLine turns one line of DRAKVUF output into a Sighting.
 //
 // It returns ok=false for a line that carries nothing worth an event -- a
@@ -80,12 +98,15 @@ func ParseDrakvufLine(decoyID string, raw []byte) (drivers.Sighting, bool) {
 
 	s := drivers.Sighting{
 		DecoyID: decoyID,
-		Time:    drakvufTime(l.TimeStamp),
+		Time:    drakvufTimeVal(float64(l.TimeStamp)),
 		Process: l.ProcessName,
 		PID:     l.PID,
 		PPID:    l.PPID,
-		User:    l.UserName,
+		User:    strconv.Itoa(l.UserId),
 		Detail:  map[string]string{},
+	}
+	if l.UserId == 0 {
+		s.User = ""
 	}
 
 	switch strings.ToLower(l.Plugin) {
@@ -100,7 +121,7 @@ func ParseDrakvufLine(decoyID string, raw []byte) (drivers.Sighting, bool) {
 		}
 		s.Target = l.CommandLine
 
-	case "filedelete", "filetracer":
+	case "filedelete", "filedelete2", "filetracer":
 		s.Kind = "file"
 		s.Action = normalizeFileOp(l.Operation, l.Plugin)
 		s.Target = normalizePath(l.FileName)
@@ -155,10 +176,10 @@ func ParseDrakvufLine(decoyID string, raw []byte) (drivers.Sighting, bool) {
 	return s, true
 }
 
-// drakvufTime converts DRAKVUF's floating-point unix seconds to a time. A zero
+// drakvufTimeVal converts DRAKVUF's floating-point unix seconds to a time. A zero
 // or absent timestamp becomes "now", so a sighting is never mis-dated to 1970,
 // which would put it outside every engagement window.
-func drakvufTime(ts float64) time.Time {
+func drakvufTimeVal(ts float64) time.Time {
 	if ts <= 0 {
 		return time.Now()
 	}
@@ -184,7 +205,7 @@ func normalizePath(p string) string {
 
 func normalizeFileOp(op, plugin string) string {
 	switch {
-	case strings.EqualFold(plugin, "filedelete"):
+	case strings.EqualFold(plugin, "filedelete"), strings.EqualFold(plugin, "filedelete2"):
 		return "delete"
 	case strings.Contains(strings.ToLower(op), "write"):
 		return "write"
