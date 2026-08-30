@@ -16,8 +16,8 @@
 
 Работещ продукт в профил P0 („honeypot в кутия"): един бинар вдига примамки,
 записва всичко в tamper-evident chain, стичва го в engagement-и, вдига аларми
-и го показва в комерсиална операторска конзола. ~40 200 реда Go, ~10 000 от
-тях тестове. 29 тестови пакета.
+и го показва в комерсиална операторска конзола. ~41 000 реда Go, ~11 000 от
+тях тестове. 30 тестови пакета.
 
 **Proxmox REST API драйвер** работи дистанционно (без pvesh) — ticket auth,
 API token, TLS fingerprint pinning. Cloud-init Ubuntu 24.04 шаблон (VMID 9000)
@@ -74,7 +74,7 @@ make build
 | `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn, start/stop |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
 | `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI; пълен glue: config→app wiring, domain resolver, DumpMemory, crypto hook, Xen Probe; валидация на хардуер остава) |
-| `internal/api` | REST (32 endpoint-а) + вградена конзола (`internal/api/web/` — 12-секционен SPA) |
+| `internal/api` | REST (34 endpoint-а) + вградена конзола (`internal/api/web/` — 13-секционен SPA); 28 теста: auth, CSP, XSS escape, всеки endpoint без зависимости |
 | `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
 | `internal/drivers/nac` | `none` (честен no-op) + `freeradius` (RADIUS CoA — насочва непознато устройство към deception VLAN вместо да го блокира) |
 | `internal/graph` | `mirage-graph` — attack-path deception; поставя примамки по вероятните пътища на атаката |
@@ -229,6 +229,21 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
   quoted число като string, не float64 — custom UnmarshalJSON е задължителен.
 - **DRAKVUF няма UserName — полето е UserId (int).** `get_common_data()` в
   jsonfmt.h emit-ва `UserId` (числов UID/SID), не текстово потребителско име.
+- **DRAKVUF на Linux генерира само listing, не triggered events.** `procmon`
+  emit-ва `RunningProcess` (обхождане на task_struct); `syscalls` и `filetracer`
+  не закачат нищо (0 събития). Triggered events с `ProcessName`/`UserId`/`TID`/
+  `CommandLine` идват само от Windows guests. Парсерът приема и двата формата
+  с fallback: `ProcessName` > `RunningProcess`.
+- **Xen 4.20 altp2m=1, не altp2m=mixed.** Boot параметърът `altp2m=mixed`
+  е невалиден в Xen 4.20 (rc=-1). Domain config `altp2m = "external"` (не
+  `"mixed"`, което гърми с HVM_PARAM_ALTP2M грешка).
+- **libvmi config ключ е `volatility_ist`, не `json_path`.** flex/bison
+  парсерът в libvmi не разпознава `json_path` — получаваш "unknown config
+  key" без ясно съобщение. ISF профил от dwarf2json се подава с `volatility_ist`.
+- **vm_event lock при DRAKVUF crash/timeout.** Ако DRAKVUF не се изключи
+  чисто (timeout, kill), vm_event остава заключен — следващото стартиране
+  гърми с "Device or resource busy". Единственият fix е `xl destroy` + `xl
+  create`.
 
 ---
 
@@ -259,17 +274,27 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
 4. ~~**VMI observer — hypervisor glue**~~ ✓ — пълен glue: config→app wiring,
    domain resolver, Observe горутини, DumpMemory (vmi-dump-memory/xl), crypto
    hook (apimon→T1486), Xen Probe (/proc/xen + xl), API endpoint-и, GUI секция.
-   14 теста. **Парсерът е валидиран срещу DRAKVUF v1.1 сорс.**
+   16 теста. **Парсерът е валидиран живо срещу реален DRAKVUF изход.**
 
-   **Xen валидация (2026-08-30):** Xen 4.17 инсталиран на Proxmox хоста като
-   dual-boot. libvmi компилиран, `vmi-process-list` и `vmi-dump-memory` работят
-   срещу HVM domU. DRAKVUF v1.1 компилиран, но **не може да тръгне** — CPU
-   (i3-9100T) няма VMFUNC за altp2m. Парсерът е валидиран срещу сорс кода:
-   поправени TimeStamp (quoted string), UserId (int вместо UserName), filedelete2.
+   **Xen валидация (2026-08-30):** Xen 4.20 (Debian 13) на Dell Inspiron 5401
+   (i5-1035G1, Ice Lake — има VMFUNC). libvmi компилиран, `vmi-process-list`
+   работи. DRAKVUF v1.1 компилиран и **тръгва живо** — altp2m=external, HVM
+   guest с debootstrap + ISF профил (dwarf2json, 51 MB). Парсерът е
+   **live-validated**: поправен за RunningProcess (listing формат vs. ProcessName
+   за triggered events).
+
+   **Живо откритие:** На Linux guest DRAKVUF генерира само process listing
+   (RunningProcess формат, без UserId/TID/CommandLine). Triggered events
+   (ProcessName/UserId/TID) идват от Windows kernel hooks (syscalls/filetracer
+   плъгините на Linux не закачат нищо — 0 събития). За пълна VMI интроспекция
+   (exec, file delete, registry) е нужен **Windows guest + Windows ISF профил**.
 
    **Важно за средата:** DRAKVUF изисква **Xen + CPU с VMFUNC** (altp2m).
-   Наличният i3-9100T го няма. VM примамките работят на Proxmox (KVM/QEMU),
-   но agentless VMI иска Xen dom0 на CPU с EPT+VMFUNC (Haswell+, не всички).
+   i3-9100T (Coffee Lake) го няма; i5-1035G1 (Ice Lake) го има. VM примамките
+   работят на Proxmox (KVM/QEMU), но agentless VMI иска Xen dom0 на CPU
+   с EPT+VMFUNC. Xen 4.20 ползва `altp2m=1` (не `=mixed`), domain config
+   ползва `altp2m = "external"` (не `"mixed"`). libvmi config ключът е
+   `volatility_ist` (не `json_path`).
 5. ~~**mirage-vault**~~ ✓ — ed25519 seal на chain head + опционален RFC 3161
    timestamp (`miragectl vault seal|verify`). Веригата вече е проверима от трета
    страна: подписът казва „това е от това внедряване", timestamp-ът — „съществуваше

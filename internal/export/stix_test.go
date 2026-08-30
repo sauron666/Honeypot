@@ -112,3 +112,122 @@ func TestIOCListDeduplicates(t *testing.T) {
 		t.Fatalf("IOC list did not deduplicate:\n%s", list)
 	}
 }
+
+func TestSTIXBundleEmptyObservations(t *testing.T) {
+	raw, err := STIXBundle(nil, "tenant", "site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		t.Fatalf("empty bundle is not valid JSON: %v", err)
+	}
+	if bundle["type"] != "bundle" {
+		t.Fatalf("expected bundle type, got %v", bundle["type"])
+	}
+	objs := bundle["objects"].([]any)
+	if len(objs) != 1 {
+		t.Fatalf("empty bundle should have only the identity object, got %d", len(objs))
+	}
+}
+
+func TestSTIXBundleObservationWithoutIOC(t *testing.T) {
+	obs := []Observation{{
+		SrcIP: "10.0.0.1", Service: "ssh", Technique: "T1110",
+		Description: "password spray", Timestamp: time.Now(),
+	}}
+	raw, err := STIXBundle(obs, "t", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle map[string]any
+	json.Unmarshal(raw, &bundle)
+	objs := bundle["objects"].([]any)
+	for _, o := range objs {
+		m := o.(map[string]any)
+		if m["type"] == "indicator" {
+			t.Fatal("an observation with no IOC value should not produce an indicator")
+		}
+	}
+}
+
+func TestSTIXRelationshipLinksIndicatorToAttackPattern(t *testing.T) {
+	raw, _ := STIXBundle(sampleObs(), "t", "s")
+	var bundle map[string]any
+	json.Unmarshal(raw, &bundle)
+	objs := bundle["objects"].([]any)
+
+	indicators := map[string]bool{}
+	attackPatterns := map[string]bool{}
+	for _, o := range objs {
+		m := o.(map[string]any)
+		switch m["type"] {
+		case "indicator":
+			indicators[m["id"].(string)] = true
+		case "attack-pattern":
+			attackPatterns[m["id"].(string)] = true
+		}
+	}
+
+	var relCount int
+	for _, o := range objs {
+		m := o.(map[string]any)
+		if m["type"] != "relationship" {
+			continue
+		}
+		relCount++
+		src := m["source_ref"].(string)
+		tgt := m["target_ref"].(string)
+		if !indicators[src] {
+			t.Fatalf("relationship source %q is not an indicator", src)
+		}
+		if !attackPatterns[tgt] {
+			t.Fatalf("relationship target %q is not an attack-pattern", tgt)
+		}
+		if m["relationship_type"] != "indicates" {
+			t.Fatalf("unexpected relationship type: %v", m["relationship_type"])
+		}
+	}
+	if relCount == 0 {
+		t.Fatal("no relationship objects linking indicators to attack patterns")
+	}
+}
+
+func TestIOCListEmptyObservations(t *testing.T) {
+	list := IOCList(nil)
+	lines := strings.Split(strings.TrimSpace(list), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("empty IOC list should have only the header, got %d lines", len(lines))
+	}
+}
+
+func TestIOCListSkipsEmptyValues(t *testing.T) {
+	obs := []Observation{
+		{IOCType: "ipv4-addr", IOCValue: "", Service: "ssh", Timestamp: time.Now()},
+		{IOCType: "ipv4-addr", IOCValue: "10.0.0.1", Service: "ssh", Timestamp: time.Now()},
+	}
+	list := IOCList(obs)
+	lines := strings.Split(strings.TrimSpace(list), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected header + 1 entry, got %d lines:\n%s", len(lines), list)
+	}
+}
+
+func TestTheHiveAlertContainsTags(t *testing.T) {
+	raw, err := TheHiveAlert("test", "desc", "1.2.3.4", "ssh", 3, []string{"T1110", "T1021"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var alert map[string]any
+	json.Unmarshal(raw, &alert)
+	tags := alert["tags"].([]any)
+	found := map[string]bool{}
+	for _, tag := range tags {
+		found[tag.(string)] = true
+	}
+	for _, want := range []string{"deception", "mirage", "ssh", "T1110", "T1021"} {
+		if !found[want] {
+			t.Fatalf("missing tag %q in TheHive alert", want)
+		}
+	}
+}

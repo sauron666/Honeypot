@@ -106,19 +106,19 @@ func nis2Controls(c Capabilities) []Control {
 	return []Control{
 		{Framework: "NIS2", ID: "Art.21(b)", Title: "Incident handling",
 			Satisfied: c.HasEngagements && c.HasAlerts,
-			Evidence:  condStr(c.HasEngagements, "Engagement tracker stitches events into attributed incidents; alerts forward to SIEM")},
+			Evidence:  condStr(c.HasEngagements && c.HasAlerts, "Engagement tracker stitches events into attributed incidents; alerts forward to SIEM")},
 		{Framework: "NIS2", ID: "Art.21(d)", Title: "Supply chain security",
 			Satisfied: c.HasBreadcrumbs || c.HasTokens,
-			Evidence:  condStr(c.HasBreadcrumbs, "Breadcrumbs and honeytokens planted on endpoints detect lateral movement from supply-chain compromise")},
+			Evidence:  condStr(c.HasBreadcrumbs || c.HasTokens, "Breadcrumbs and honeytokens planted on endpoints detect lateral movement from supply-chain compromise")},
 		{Framework: "NIS2", ID: "Art.21(e)", Title: "Security in acquisition and development",
 			Satisfied: c.HasHashChain,
 			Evidence:  condStr(c.HasHashChain, "Evidence chain is append-only with SHA-256 hash chain; tamper detection is built-in")},
 		{Framework: "NIS2", ID: "Art.21(g)", Title: "Cybersecurity assessment",
 			Satisfied: c.HasAssure && c.HasFingerprint,
-			Evidence:  condStr(c.HasAssure, "Self-test (miragectl assure) and detectability scoring (miragectl fingerprint) run continuously")},
+			Evidence:  condStr(c.HasAssure && c.HasFingerprint, "Self-test (miragectl assure) and detectability scoring (miragectl fingerprint) run continuously")},
 		{Framework: "NIS2", ID: "Art.23", Title: "Reporting obligations",
 			Satisfied: c.HasForge && c.HasEconomics,
-			Evidence:  condStr(c.HasForge, "Detection forge generates Sigma/Suricata/YARA/STIX + incident report; economics provides quantitative metrics")},
+			Evidence:  condStr(c.HasForge && c.HasEconomics, "Detection forge generates Sigma/Suricata/YARA/STIX + incident report; economics provides quantitative metrics")},
 	}
 }
 
@@ -126,10 +126,10 @@ func doraControls(c Capabilities) []Control {
 	return []Control{
 		{Framework: "DORA", ID: "Art.10", Title: "ICT-related incident detection",
 			Satisfied: c.HasDecoys && c.HasAlerts && c.SinkCount > 0,
-			Evidence:  condStr(c.HasDecoys, fmt.Sprintf("%d decoys with %d alert sinks; any contact is a confirmed incident (0 false positives)", c.DecoyCount, c.SinkCount))},
+			Evidence:  condStr(c.HasDecoys && c.HasAlerts && c.SinkCount > 0, fmt.Sprintf("%d decoys with %d alert sinks; any contact is a confirmed incident (0 false positives)", c.DecoyCount, c.SinkCount))},
 		{Framework: "DORA", ID: "Art.11", Title: "ICT-related incident response",
 			Satisfied: c.HasEngagements && c.HasForge,
-			Evidence:  condStr(c.HasEngagements, "Engagements provide timeline and attribution; forge generates detection artefacts for the SOC")},
+			Evidence:  condStr(c.HasEngagements && c.HasForge, "Engagements provide timeline and attribution; forge generates detection artefacts for the SOC")},
 		{Framework: "DORA", ID: "Art.25", Title: "Threat-led penetration testing",
 			Satisfied: c.HasAssure,
 			Evidence:  condStr(c.HasAssure, "miragectl assure performs automated threat-led testing of the deception deployment itself")},
@@ -140,13 +140,13 @@ func iso27001Controls(c Capabilities) []Control {
 	return []Control{
 		{Framework: "ISO 27001:2022", ID: "A.8.16", Title: "Monitoring activities",
 			Satisfied: c.HasDecoys && c.HasHashChain,
-			Evidence:  condStr(c.HasDecoys, "Decoys produce tamper-evident telemetry with hash-chain integrity")},
+			Evidence:  condStr(c.HasDecoys && c.HasHashChain, "Decoys produce tamper-evident telemetry with hash-chain integrity")},
 		{Framework: "ISO 27001:2022", ID: "A.5.7", Title: "Threat intelligence",
 			Satisfied: c.HasForge,
 			Evidence:  condStr(c.HasForge, "Detection forge converts observations into actionable threat intelligence (Sigma, STIX, IOCs)")},
 		{Framework: "ISO 27001:2022", ID: "A.5.25", Title: "Assessment of information security events",
 			Satisfied: c.HasEngagements && c.HasEconomics,
-			Evidence:  condStr(c.HasEngagements, "Engagements automatically assess and score incidents; economics quantifies attacker time consumed")},
+			Evidence:  condStr(c.HasEngagements && c.HasEconomics, "Engagements automatically assess and score incidents; economics quantifies attacker time consumed")},
 		{Framework: "ISO 27001:2022", ID: "A.8.7", Title: "Protection against malware",
 			Satisfied: c.HasRansomware,
 			Evidence:  condStr(c.HasRansomware, "Six independent ransomware signals + tarpit + ransom note extraction")},
@@ -157,13 +157,13 @@ func pciControls(c Capabilities) []Control {
 	return []Control{
 		{Framework: "PCI DSS 4.0", ID: "11.5", Title: "Network intrusion detection",
 			Satisfied: c.HasDecoys && c.HasAlerts,
-			Evidence:  condStr(c.HasDecoys, "Decoys act as network-level intrusion detection with zero false positives")},
+			Evidence:  condStr(c.HasDecoys && c.HasAlerts, "Decoys act as network-level intrusion detection with zero false positives")},
 		{Framework: "PCI DSS 4.0", ID: "10.2", Title: "Audit log implementation",
 			Satisfied: c.HasHashChain,
 			Evidence:  condStr(c.HasHashChain, "Append-only evidence file with SHA-256 hash chain provides tamper-evident audit logging")},
 		{Framework: "PCI DSS 4.0", ID: "12.10", Title: "Incident response plan",
 			Satisfied: c.HasForge && c.HasEngagements,
-			Evidence:  condStr(c.HasForge, "Forge generates incident report + IOCs; engagements provide the timeline")},
+			Evidence:  condStr(c.HasForge && c.HasEngagements, "Forge generates incident report + IOCs; engagements provide the timeline")},
 	}
 }
 
@@ -171,7 +171,7 @@ func soc2Controls(c Capabilities) []Control {
 	return []Control{
 		{Framework: "SOC 2", ID: "CC7.2", Title: "Monitoring of system components",
 			Satisfied: c.HasDecoys && c.HasAlerts && c.HasHashChain,
-			Evidence:  condStr(c.HasDecoys, "Continuous deception monitoring with tamper-evident evidence chain and real-time alerts")},
+			Evidence:  condStr(c.HasDecoys && c.HasAlerts && c.HasHashChain, "Continuous deception monitoring with tamper-evident evidence chain and real-time alerts")},
 		{Framework: "SOC 2", ID: "CC7.3", Title: "Detection of unauthorized activity",
 			Satisfied: c.HasDecoys,
 			Evidence:  condStr(c.HasDecoys, "Any interaction with a decoy is unauthorized by definition — zero legitimate use, zero false positives")},
@@ -182,7 +182,7 @@ func iec62443Controls(c Capabilities) []Control {
 	return []Control{
 		{Framework: "IEC 62443", ID: "SR 3.3", Title: "Security functionality verification",
 			Satisfied: c.HasAssure && c.HasFingerprint,
-			Evidence:  condStr(c.HasAssure, "Self-test verifies detection capability; fingerprint scores detectability of each decoy")},
+			Evidence:  condStr(c.HasAssure && c.HasFingerprint, "Self-test verifies detection capability; fingerprint scores detectability of each decoy")},
 		{Framework: "IEC 62443", ID: "SR 6.1", Title: "Audit log accessibility",
 			Satisfied: c.HasHashChain,
 			Evidence:  condStr(c.HasHashChain, "Evidence file is append-only with cryptographic integrity; miragectl verify checks the chain")},

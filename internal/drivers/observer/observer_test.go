@@ -250,6 +250,33 @@ func TestBareNumericTimestampStillWorks(t *testing.T) {
 	}
 }
 
+func TestRunningProcessFallback(t *testing.T) {
+	// Real DRAKVUF on Linux emits RunningProcess (initial listing) instead of
+	// ProcessName (triggered events). The parser must accept both.
+	line := `{"Plugin":"procmon","TimeStamp":"1788109078.076494","PID":1,"PPID":0,"RunningProcess":"swapper/0","Bitness":0}`
+	s, ok := ParseDrakvufLine("vm-linux", []byte(line))
+	if !ok {
+		t.Fatal("RunningProcess line did not parse")
+	}
+	if s.Process != "swapper/0" {
+		t.Fatalf("process name not extracted from RunningProcess: %q", s.Process)
+	}
+	if s.Kind != "process" {
+		t.Fatalf("wrong kind: %q", s.Kind)
+	}
+}
+
+func TestProcessNameTakesPrecedenceOverRunningProcess(t *testing.T) {
+	line := `{"Plugin":"procmon","TimeStamp":"1710000000.000000","ProcessName":"bash","RunningProcess":"old","PID":1,"CommandLine":"bash"}`
+	s, ok := ParseDrakvufLine("vm", []byte(line))
+	if !ok {
+		t.Fatal("line with both fields did not parse")
+	}
+	if s.Process != "bash" {
+		t.Fatalf("ProcessName should take precedence, got %q", s.Process)
+	}
+}
+
 func TestProbeFailsOnNonXenHost(t *testing.T) {
 	d, _ := NewDrakvuf(nil)
 	err := d.(*Drakvuf).Probe(context.Background())
