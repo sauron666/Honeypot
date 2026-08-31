@@ -23,6 +23,7 @@ var NAV = [
   { id: 'evidence',    icon: '●', label: 'Evidence Chain' },
   { id: 'compliance',  icon: '✓', label: 'Compliance' },
   { id: 'observer',    icon: '◈', label: 'Observer / VMI' },
+  { id: 'topology',    icon: '⌘', label: 'Topology' },
   { id: 'presence',    icon: '⊕', label: 'Presence' },
   { id: 'config',      icon: '⊡', label: 'Configuration' },
   { id: 'about',       icon: '⊙', label: 'About / Status' },
@@ -222,6 +223,7 @@ var VIEWS = {
   evidence:    viewEvidence,
   compliance:  viewCompliance,
   observer:    viewObserver,
+  topology:    viewTopology,
   presence:    viewPresence,
   config:      viewConfig,
   about:       viewAbout,
@@ -1183,6 +1185,30 @@ function viewVMs(c) {
 
       var actTd = el('td', 'narrow');
       if (!d.burned) {
+        // Power control. Reset happens only after a closed engagement, never on
+        // a timer — but an operator may need to stop or start a decoy by hand
+        // (maintenance, staged rollout). The server refuses a start while the
+        // decoy is already running and vice versa.
+        var powerAction = d.state === 'running' ? 'stop' : 'start';
+        var powerBtn = el('button', 'btn btn-sm btn-secondary',
+          powerAction === 'stop' ? 'Stop' : 'Start');
+        powerBtn.title = powerAction === 'stop'
+          ? 'Power the decoy off. Stops observation and listeners.'
+          : 'Power the decoy on.';
+        powerBtn.style.marginRight = '4px';
+        powerBtn.addEventListener('click', function () {
+          toast((powerAction === 'stop' ? 'Stopping ' : 'Starting ') + d.id + '…');
+          api('/api/vms/' + encodeURIComponent(d.id) + '/' + powerAction, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: 'from the operator console' }),
+          }).then(function () {
+            toast('VM ' + powerAction + ': ' + d.id, 'ok');
+            viewVMs(c).catch(function (e) { toast(e.message, 'err'); });
+          }).catch(function (e) { toast(e.message, 'err'); });
+        });
+        actTd.appendChild(powerBtn);
+
         var burnBtn = el('button', 'btn btn-sm btn-danger', 'Burn');
         burnBtn.title = 'Take out of service and preserve as evidence. Cannot be undone.';
         burnBtn.addEventListener('click', function () {
@@ -1490,57 +1516,40 @@ function viewCompliance(c) {
   output.appendChild(loading());
   c.appendChild(output);
 
-  // Try the compliance endpoint
-  return tryApi('/api/compliance?framework=' + S.compFw).then(function (data) {
+  // The server exposes the framework as a path segment, not a query parameter.
+  return tryApi('/api/compliance/' + encodeURIComponent(S.compFw)).then(function (data) {
     output.replaceChildren();
     if (!data) {
-      // Endpoint not available yet
+      // Endpoint genuinely unreachable (older deployment) — degrade gracefully.
       var panel = el('div', 'panel');
       panel.appendChild(panelHead('Compliance: ' + S.compFw.toUpperCase()));
       var body = el('div', 'panel-body padded');
       body.appendChild(el('div', 't-sec',
-        'The compliance reporting endpoint is not yet available via the API in this deployment. ' +
-        'Use miragectl compliance --framework ' + S.compFw + ' to generate a report from the command line.'));
-
-      // Show what capabilities MIRAGE provides for compliance
-      var caps = el('div');
-      caps.style.marginTop = '16px';
-      caps.appendChild(el('h3', null, 'Deception Capabilities for Compliance'));
-      var capList = [
-        'Append-only tamper-evident evidence chain (chain verification via Evidence tab)',
-        'Automated detection content generation (Sigma, Suricata, YARA, STIX)',
-        'Honeytoken deployment and monitoring',
-        'Full-OS VM decoy management with containment enforcement',
-        'Attacker engagement tracking with ATT&CK mapping',
-        'Incident report generation per engagement',
-        'Self-test and detectability scoring',
-        'Breadcrumb deployment with reversible placement',
-      ];
-      capList.forEach(function (cap) {
-        var item = el('div');
-        item.style.padding = '4px 0';
-        item.textContent = '✓ ' + cap;
-        caps.appendChild(item);
-      });
-      body.appendChild(caps);
+        'The compliance reporting endpoint is not reachable in this deployment. ' +
+        'Use miragectl compliance to generate a report from the command line.'));
       panel.appendChild(body);
       output.appendChild(panel);
       return;
     }
 
-    // Render compliance data from API
+    // Render compliance data from API. The server returns:
+    //   { framework, controls[{id,title,description,satisfied,evidence}],
+    //     passed, total, coverage }  where coverage is a 0..100 percentage.
     var panel = el('div', 'panel');
-    panel.appendChild(panelHead('Compliance: ' + (data.framework || S.compFw).toUpperCase()));
+    var countBadge = data.total != null
+      ? el('span', 'tag tag-accent', data.passed + '/' + data.total)
+      : null;
+    panel.appendChild(panelHead('Compliance: ' + (data.framework || S.compFw.toUpperCase()), countBadge));
     var body = el('div', 'panel-body padded');
 
     if (data.coverage != null) {
-      var pctText = Math.round(data.coverage * 100) + '% coverage';
-      body.appendChild(el('div', 't-accent', pctText));
+      var pct = Math.round(data.coverage);
+      body.appendChild(el('div', 't-accent', pct + '% coverage'));
       var track = el('div', 'progress-track');
       track.style.marginTop = '8px'; track.style.marginBottom = '16px';
       var fill = el('div', 'progress-fill');
-      fill.style.width = Math.round(data.coverage * 100) + '%';
-      fill.style.background = data.coverage > 0.7 ? 'var(--ok)' : data.coverage > 0.4 ? 'var(--warn)' : 'var(--err)';
+      fill.style.width = pct + '%';
+      fill.style.background = pct > 70 ? 'var(--ok)' : pct > 40 ? 'var(--warn)' : 'var(--err)';
       track.appendChild(fill);
       body.appendChild(track);
     }
@@ -1549,7 +1558,7 @@ function viewCompliance(c) {
       var tbl = el('table', 'tbl');
       var thead = el('thead');
       var hr = el('tr');
-      ['Control', 'Description', 'Status', 'Capability'].forEach(function (h) {
+      ['Control', 'Title', 'Status', 'Evidence'].forEach(function (h) {
         hr.appendChild(el('th', null, h));
       });
       thead.appendChild(hr);
@@ -1558,22 +1567,17 @@ function viewCompliance(c) {
       data.controls.forEach(function (ctrl) {
         var tr = el('tr');
         tr.appendChild(el('td', 'narrow', ctrl.id || ''));
-        tr.appendChild(el('td', null, ctrl.description || ''));
+        tr.appendChild(el('td', null, ctrl.title || ctrl.description || ''));
         var stTd = el('td', 'narrow');
-        stTd.appendChild(el('span', ctrl.covered ? 't-ok' : 't-muted', ctrl.covered ? 'covered' : 'gap'));
+        stTd.appendChild(el('span', ctrl.satisfied ? 't-ok' : 't-muted', ctrl.satisfied ? 'satisfied' : 'gap'));
         tr.appendChild(stTd);
-        tr.appendChild(el('td', null, ctrl.capability || ''));
+        tr.appendChild(el('td', null, ctrl.evidence || ''));
         tbody.appendChild(tr);
       });
       tbl.appendChild(tbody);
       body.appendChild(tbl);
-    }
-
-    if (data.report) {
-      var dlBtn = el('button', 'btn btn-secondary', 'Download Report');
-      dlBtn.style.marginTop = '12px';
-      dlBtn.addEventListener('click', function () { copyText(data.report); });
-      body.appendChild(dlBtn);
+    } else {
+      body.appendChild(el('div', 't-muted', 'No controls returned for this framework.'));
     }
 
     panel.appendChild(body);
@@ -1668,6 +1672,159 @@ function viewObserver(c) {
     });
     form.appendChild(dumpBtn);
     c.appendChild(form);
+  });
+}
+
+// VIEW: TOPOLOGY (deception estate map)
+// ================================================================
+
+var SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgEl(tag, attrs) {
+  var n = document.createElementNS(SVG_NS, tag);
+  if (attrs) {
+    Object.keys(attrs).forEach(function (k) { n.setAttribute(k, String(attrs[k])); });
+  }
+  return n;
+}
+
+// Colour per node type. Kept in sync with the server's node "type" values
+// (director, decoy, vm, hub, agent).
+var TOPO_COLORS = {
+  director: 'var(--accent)',
+  decoy:    'var(--ok)',
+  vm:       'var(--purple)',
+  hub:      'var(--warn)',
+  agent:    'var(--text-muted)',
+};
+
+function viewTopology(c) {
+  return api('/api/topology').then(function (data) {
+    c.replaceChildren();
+
+    var nodes = data.nodes || [];
+    var edges = data.edges || [];
+
+    if (!nodes.length) {
+      c.appendChild(emptyState('No topology to display — no decoys, VMs or overlay agents are bound yet.'));
+      return;
+    }
+
+    var panel = el('div', 'panel');
+    panel.appendChild(panelHead('Deception Estate',
+      el('span', 'tag tag-accent', data.count_nodes + ' nodes · ' + data.count_edges + ' links')));
+    var body = el('div', 'panel-body padded');
+
+    // Deterministic radial layout: the director sits in the centre, every
+    // other node is placed on a ring around it. No physics, no external graph
+    // library (CSP forbids remote scripts) — just trig, so the picture is
+    // stable between refreshes and an analyst can memorise where things are.
+    var W = 720, H = 520, cx = W / 2, cy = H / 2;
+    var center = null;
+    var ring = [];
+    nodes.forEach(function (n) {
+      if (n.type === 'director') center = n; else ring.push(n);
+    });
+    if (!center) { center = ring.shift(); }
+
+    var pos = {};
+    if (center) pos[center.id] = { x: cx, y: cy };
+    var R = Math.min(W, H) / 2 - 70;
+    ring.forEach(function (n, i) {
+      var ang = (2 * Math.PI * i) / Math.max(ring.length, 1) - Math.PI / 2;
+      pos[n.id] = { x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang) };
+    });
+
+    var svg = svgEl('svg', {
+      viewBox: '0 0 ' + W + ' ' + H, width: '100%',
+      preserveAspectRatio: 'xMidYMid meet',
+    });
+    svg.style.maxWidth = W + 'px';
+    svg.style.display = 'block';
+    svg.style.margin = '0 auto';
+
+    // Edges first, so nodes draw on top.
+    edges.forEach(function (e) {
+      var a = pos[e.from], b = pos[e.to];
+      if (!a || !b) return;
+      var line = svgEl('line', {
+        x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+        stroke: 'var(--border)', 'stroke-width': 1.5,
+      });
+      svg.appendChild(line);
+      if (e.label) {
+        var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        var lbl = svgEl('text', {
+          x: mx, y: my - 3, 'text-anchor': 'middle',
+          'font-size': 10, fill: 'var(--text-muted)',
+        });
+        lbl.textContent = e.label;
+        svg.appendChild(lbl);
+      }
+    });
+
+    // Nodes.
+    nodes.forEach(function (n) {
+      var p = pos[n.id];
+      if (!p) return;
+      var g = svgEl('g', null);
+      var isCenter = (center && n.id === center.id);
+      var r = isCenter ? 16 : 11;
+      var circle = svgEl('circle', {
+        cx: p.x, cy: p.y, r: r,
+        fill: TOPO_COLORS[n.type] || 'var(--text-muted)',
+        stroke: 'var(--bg)', 'stroke-width': 2,
+      });
+      var title = svgEl('title', null);
+      title.textContent = n.type + ': ' + (n.label || n.id) + (n.ip ? ' (' + n.ip + ')' : '');
+      circle.appendChild(title);
+      g.appendChild(circle);
+
+      var caption = svgEl('text', {
+        x: p.x, y: p.y + r + 13, 'text-anchor': 'middle',
+        'font-size': 11, fill: 'var(--text)',
+      });
+      caption.textContent = n.label || n.id;
+      g.appendChild(caption);
+
+      if (n.ip) {
+        var ipt = svgEl('text', {
+          x: p.x, y: p.y + r + 25, 'text-anchor': 'middle',
+          'font-size': 9, fill: 'var(--text-muted)',
+        });
+        ipt.textContent = n.ip;
+        g.appendChild(ipt);
+      }
+      svg.appendChild(g);
+    });
+
+    body.appendChild(svg);
+
+    // Legend.
+    var legend = el('div', 'topo-legend');
+    legend.style.marginTop = '12px';
+    legend.style.display = 'flex';
+    legend.style.flexWrap = 'wrap';
+    legend.style.gap = '14px';
+    [['director', 'Director'], ['decoy', 'Decoy service'], ['vm', 'Full-OS VM'],
+     ['hub', 'Presence hub'], ['agent', 'Overlay agent']].forEach(function (pair) {
+      var item = el('span');
+      item.style.display = 'inline-flex';
+      item.style.alignItems = 'center';
+      item.style.gap = '6px';
+      var dot = el('span');
+      dot.style.width = '10px'; dot.style.height = '10px';
+      dot.style.borderRadius = '50%';
+      dot.style.background = TOPO_COLORS[pair[0]];
+      dot.style.display = 'inline-block';
+      item.appendChild(dot);
+      item.appendChild(el('span', 't-muted', pair[1]));
+      legend.appendChild(item);
+    });
+    body.appendChild(legend);
+
+    panel.appendChild(body);
+    c.appendChild(panel);
   });
 }
 
