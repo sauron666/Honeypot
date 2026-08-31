@@ -33,11 +33,19 @@ API endpoint-и (GET /api/observer, POST /api/observer/{id}/dump), GUI секц�
 vmi-dump-memory работят на Xen 4.17 HVM domU. **За пълна DRAKVUF интроспекция
 е нужен CPU с VMFUNC** (altp2m) — i3-9100T го няма.
 
-**GUI** — 13-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
+**GUI** — 14-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
 full-OS VMs, detection rules, evidence chain, compliance, **observer/VMI**,
-presence, config, status.
+**topology**, presence, config, status. VM секцията вече има start/stop бутони;
+compliance секцията чете от `/api/compliance/{framework}` (беше счупена — query
+vs path); topology секцията рисува цялата естейт като инлайн SVG звезда
+(director→decoys/vms/hub/agents) от `/api/topology`.
 34 REST endpoint-а (10 нови: compliance, graph, topology, VM start/stop, system,
 fingerprint, observer status, observer dump).
+
+**Туториали** — `docs/tutorials/` (11 броя, български): quickstart, конзола,
+honeytokens, детекции, VM декои, VMI, overlay, AD/Kerberos, breadcrumbs,
+доказателства+vault, compliance+export. Всеки показва GUI и CLI, където има
+смисъл.
 
 **Платформи:** компилира се и минава тестове на Linux и Windows. На Windows
 Unix file permissions не се проверяват (не съществуват); тестовете го пропускат
