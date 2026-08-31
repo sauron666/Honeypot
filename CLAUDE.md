@@ -92,7 +92,7 @@ make build
 | `internal/life` | синтетичен живот: детерминистичен график на логини/логове/lastLogon като функция на времето; примамката изглежда все по-обитаема при всяка проверка |
 | `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn, start/stop |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
-| `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI; пълен glue: config→app wiring, domain resolver, DumpMemory, crypto hook, Xen Probe; валидация на хардуер остава) |
+| `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI, Xen) + `agent` (in-guest сензор, всеки хипервайзор; приемник + fan-out per-decoy, token auth, drop-on-overflow; НЕ декларира CapAgentless) |
 | `internal/api` | REST (34 endpoint-а) + вградена конзола (`internal/api/web/` — 13-секционен SPA); 28 теста: auth, CSP, XSS escape, всеки endpoint без зависимости |
 | `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
 | `internal/drivers/nac` | `none` (честен no-op) + `freeradius` (RADIUS CoA — насочва непознато устройство към deception VLAN вместо да го блокира) |
@@ -106,7 +106,7 @@ make build
 | `internal/replay` | SSH session replay в asciinema v2 формат |
 | `internal/vault` | подписани доказателства: ed25519 seal на chain head + RFC 3161 trusted timestamp; прави веригата проверима от трета страна (съд/одитор) |
 | `internal/drivers/compute` (proxmox) | добавен `proxmox` драйвер към `inproc`/`podman`/`libvirt` |
-| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs` | бинарите. `miragectl` изкарва всичко: doctor/plan/apply/verify/events/forge/tokens/assure/fingerprint/vms/presence-ca/economics + **export/compliance/insider/fleet/graph/toolkit/watermark/replay/vault** |
+| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs`, `cmd/mirage-sensor` | бинарите. `miragectl` изкарва всичко: doctor/plan/apply/verify/events/forge/tokens/assure/fingerprint/vms(+smoketest)/images/presence-ca/economics + **export/compliance/insider/fleet/graph/toolkit/watermark/replay/vault**. `mirage-sensor` е in-guest колекторът (Linux netlink / Windows Sysmon → agent observer) |
 
 ### Протоколи (`internal/honeyd/svc_*.go`)
 
@@ -259,6 +259,13 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
 - **libvmi config ключ е `volatility_ist`, не `json_path`.** flex/bison
   парсерът в libvmi не разпознава `json_path` — получаваш "unknown config
   key" без ясно съобщение. ISF профил от dwarf2json се подава с `volatility_ist`.
+- **`agent` observer-ът НЕ декларира CapAgentless — нарочно.** Има сензор в
+  госта; честността е инвариант. DumpMemory е unsupported (хипервайзорно ниво).
+  Токенът е задължителен (отворен ingest = liability). Fan-out per-decoy е
+  buffered + drop-on-overflow — флудещ сензор не блокира director-а (както
+  presence мултиплексора). `mirage-sensor` колекторите (netlink/Sysmon) не се
+  тестват в CI (искат root/Windows+Sysmon); forwarder-ът е тестван. Пуска се на
+  Xen с DRAKVUF (нулев tell), навсякъде другаде с този сензор.
 - **vsphere/hyperv драйверите са Experimental — казва се явно.** `Info().
   Experimental=true` и Summary-то го пише. Unit-тествани срещу синтетичен
   vCenter (httptest) и fake runner, но НЕ на жив хипервайзор. Има тест, който

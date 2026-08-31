@@ -23,6 +23,7 @@
 | 12 | [Ransomware trap](12-ransomware-trap.md) | Защита от криптори на всеки хипервайзор (FUSE tarpit + snapshot) |
 | 13 | [Библиотека с образи](13-image-library.md) | Внеси ISO/OVA/qcow2, тагвай easy/med/hard/insane, санирай (махни флагове) |
 | 14 | [Хипервайзори](14-hypervisors.md) | KVM/Proxmox/VMware/Hyper-V — кой драйвер, конфиг, честен статус |
+| 15 | [In-guest сензор](15-in-guest-sensor.md) | Всяка команда вътре в full-OS декой на всеки хипервайзор (Linux netlink / Windows Sysmon) |
 
 ## Първите пет минути
 
