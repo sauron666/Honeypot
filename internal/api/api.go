@@ -167,8 +167,20 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 
-		if s.deps.Token != "" && !strings.HasPrefix(r.URL.Path, "/api/health") {
+		// Only the data plane needs the token. The static console shell
+		// (index.html, app.js, style.css) carries no secrets and must load
+		// unauthenticated, or a tokened deployment cannot present a login at
+		// all — the operator would be locked out of their own console.
+		if s.deps.Token != "" && strings.HasPrefix(r.URL.Path, "/api/") &&
+			!strings.HasPrefix(r.URL.Path, "/api/health") {
+			// Accept the token from the Authorization header (fetch/XHR) or a
+			// cookie (so browser-driven downloads and navigations carry it too).
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if got == "" {
+				if c, err := r.Cookie("mirage_token"); err == nil {
+					got = c.Value
+				}
+			}
 			if subtle.ConstantTimeCompare([]byte(got), []byte(s.deps.Token)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return

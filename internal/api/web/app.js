@@ -150,8 +150,43 @@ $('drawer-overlay').addEventListener('click', closeDrawer);
 // API
 // ================================================================
 
+// --- auth: token is stored per-browser and sent as a Bearer header; it is also
+// mirrored into a cookie so browser-driven downloads/navigations carry it. A
+// tokenless deployment (loopback) just works; a tokened one prompts once. ---
+
+function storedToken() {
+  try { return localStorage.getItem('mirage_token') || ''; } catch (e) { return ''; }
+}
+
+function setToken(t) {
+  try { localStorage.setItem('mirage_token', t); } catch (e) {}
+  // Cookie so <a download>, window.open and image src carry the token too.
+  document.cookie = 'mirage_token=' + encodeURIComponent(t) + '; path=/; SameSite=Strict';
+}
+
+function clearToken() {
+  try { localStorage.removeItem('mirage_token'); } catch (e) {}
+  document.cookie = 'mirage_token=; path=/; Max-Age=0; SameSite=Strict';
+}
+
+function authOpts(opts) {
+  opts = opts || {};
+  var t = storedToken();
+  if (t) {
+    var h = {};
+    if (opts.headers) { for (var k in opts.headers) h[k] = opts.headers[k]; }
+    h['Authorization'] = 'Bearer ' + t;
+    opts.headers = h;
+  }
+  return opts;
+}
+
 function api(path, opts) {
-  return fetch(path, opts).then(function (res) {
+  return fetch(path, authOpts(opts)).then(function (res) {
+    if (res.status === 401) {
+      showLogin();
+      throw new Error('401 unauthorized — enter the API token');
+    }
     if (!res.ok && res.status !== 503) {
       return res.text().then(function (t) {
         throw new Error(res.status + ' ' + t.slice(0, 200));
@@ -162,10 +197,47 @@ function api(path, opts) {
 }
 
 function apiText(path) {
-  return fetch(path).then(function (res) {
+  return fetch(path, authOpts()).then(function (res) {
+    if (res.status === 401) { showLogin(); throw new Error('401 unauthorized'); }
     if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
     return res.text();
   });
+}
+
+// showLogin overlays a token prompt. Uses textContent/el() only (no innerHTML),
+// and a button (not a native form submit — CSP form-action is 'none').
+function showLogin() {
+  if (document.getElementById('login-overlay')) return;
+  var ov = el('div');
+  ov.id = 'login-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;' +
+    'display:flex;align-items:center;justify-content:center';
+  var box = el('div', 'panel');
+  box.style.cssText = 'width:360px;padding:22px';
+  box.appendChild(el('div', 'panel-head', 'MIRAGE — API token required'));
+  var body = el('div', 'panel-body padded');
+  body.appendChild(el('div', 't-sec', 'This console requires the api.token from your profile.'));
+  var input = el('input');
+  input.type = 'password';
+  input.placeholder = 'API token';
+  input.style.cssText = 'width:100%;margin-top:12px;padding:8px;box-sizing:border-box';
+  input.value = storedToken();
+  body.appendChild(input);
+  var btn = el('button', 'btn btn-primary', 'Unlock');
+  btn.style.marginTop = '12px';
+  var submit = function () {
+    setToken(input.value.trim());
+    ov.remove();
+    loadStatus();
+    renderView();
+  };
+  btn.addEventListener('click', submit);
+  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+  body.appendChild(btn);
+  box.appendChild(body);
+  ov.appendChild(box);
+  document.body.appendChild(ov);
+  input.focus();
 }
 
 function tryApi(path, opts) {
@@ -2435,6 +2507,10 @@ document.addEventListener('keydown', function (e) {
 // ================================================================
 // INIT
 // ================================================================
+
+// Mirror any stored token into the cookie so downloads/navigations carry it
+// from the first paint (localStorage survives, the cookie may have expired).
+if (storedToken()) setToken(storedToken());
 
 buildNav();
 loadStatus();

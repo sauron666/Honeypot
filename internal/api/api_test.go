@@ -147,6 +147,40 @@ func TestNoTokenConfigMeansNoAuth(t *testing.T) {
 	}
 }
 
+// TestStaticConsoleLoadsWithoutToken is the regression test for the lock-out
+// bug: a tokened deployment must still serve the console shell (so an operator
+// can reach the login), or the token would make the UI unreachable.
+func TestStaticConsoleLoadsWithoutToken(t *testing.T) {
+	srv, _ := newTestServer(t, "s3cret")
+	for _, path := range []string{"/", "/app.js", "/style.css"} {
+		rec := do(srv.Handler(), "GET", path, "")
+		if rec.Code == http.StatusUnauthorized {
+			t.Fatalf("static asset %s must load without a token, got 401", path)
+		}
+	}
+}
+
+// TestAuthAcceptsCookieToken proves browser-driven downloads/navigations, which
+// cannot set an Authorization header, authenticate via the cookie.
+func TestAuthAcceptsCookieToken(t *testing.T) {
+	srv, _ := newTestServer(t, "s3cret")
+	req := httptest.NewRequest("GET", "/api/stats", nil)
+	req.AddCookie(&http.Cookie{Name: "mirage_token", Value: "s3cret"})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with a valid token cookie, got %d", rec.Code)
+	}
+	// A wrong cookie is still rejected.
+	req2 := httptest.NewRequest("GET", "/api/stats", nil)
+	req2.AddCookie(&http.Cookie{Name: "mirage_token", Value: "nope"})
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("a wrong token cookie must be rejected, got %d", rec2.Code)
+	}
+}
+
 // --- Security headers ---
 
 func TestSecurityHeaders(t *testing.T) {

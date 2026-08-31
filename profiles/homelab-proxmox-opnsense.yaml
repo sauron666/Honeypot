@@ -70,8 +70,8 @@ honeyd:
       services:
         - {service: ldap,     port: 3389}
         - {service: smb,      port: 4446}
-        - {service: kerberos, port: 8888, proto: tcp}
-        - {service: kerberos, port: 8888, proto: udp}
+        - {service: kerberos, port: 8888, protocol: tcp}
+        - {service: kerberos, port: 8888, protocol: udp}
 
     - id: dcy-plc01
       persona: linux/backup
