@@ -16,8 +16,8 @@
 
 Работещ продукт в профил P0 („honeypot в кутия"): един бинар вдига примамки,
 записва всичко в tamper-evident chain, стичва го в engagement-и, вдига аларми
-и го показва в комерсиална операторска конзола. ~42 300 реда Go, ~12 500 от
-тях тестове (399 тестови функции). 32 тестови пакета.
+и го показва в комерсиална операторска конзола. ~42 300 реда Go, ~12 550 от
+тях тестове (401 тестови функции). 32 тестови пакета.
 
 **Proxmox REST API драйвер** работи дистанционно (без pvesh) — ticket auth,
 API token, TLS fingerprint pinning. Cloud-init Ubuntu 24.04 шаблон (VMID 9000)
@@ -283,11 +283,19 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
    **live-validated**: поправен за RunningProcess (listing формат vs. ProcessName
    за triggered events).
 
-   **Живо откритие:** На Linux guest DRAKVUF генерира само process listing
-   (RunningProcess формат, без UserId/TID/CommandLine). Triggered events
+   **Живо откритие (Linux guest):** На Linux guest DRAKVUF генерира само process
+   listing (RunningProcess формат, без UserId/TID/CommandLine). Triggered events
    (ProcessName/UserId/TID) идват от Windows kernel hooks (syscalls/filetracer
-   плъгините на Linux не закачат нищо — 0 събития). За пълна VMI интроспекция
-   (exec, file delete, registry) е нужен **Windows guest + Windows ISF профил**.
+   плъгините на Linux не закачат нищо — 0 събития).
+
+   **Windows валидация (2026-08-31):** Windows Server 2025 (build 26100) HVM guest
+   на Xen 4.20 с `altp2m = "external"`. ISF профил генериран от PDB на
+   ntoskrnl.exe (volatility3 pdbconv). **Пълна VMI интроспекция работи:**
+   11 533 registry events (regmon), 190 file events (filetracer), 230 triggered
+   process events (procmon с ProcessName/UserId/TID/CommandLine) за 80 секунди.
+   Парсерът валидиран и срещу двата формата: listing (RunningProcess — inventory)
+   и triggered (ProcessName — атакуващо действие). Syscall/sysret plugin-ите са
+   нарочно пропуснати (хиляди в секунда — прекалено шумни за evidence chain).
 
    **Важно за средата:** DRAKVUF изисква **Xen + CPU с VMFUNC** (altp2m).
    i3-9100T (Coffee Lake) го няма; i5-1035G1 (Ice Lake) го има. VM примамките

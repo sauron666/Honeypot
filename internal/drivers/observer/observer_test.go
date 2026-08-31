@@ -318,6 +318,47 @@ func TestRunningProcessListingIsInventoryNotAnAlert(t *testing.T) {
 	}
 }
 
+func TestWindowsSyscallPluginIsSkipped(t *testing.T) {
+	// The syscall/sysret plugins emit every NT system call — thousands per second
+	// from normal Windows operation. They are too noisy for the evidence chain;
+	// procmon/filetracer/regmon give the high-level events we need. This test
+	// pins that syscall events are intentionally skipped, not accidentally lost.
+	//
+	// This line is verbatim from DRAKVUF v1.1 on Windows Server 2025 (build 26100).
+	line := `{"Plugin":"syscall","TimeStamp":"1788163848.675787","PID":3348,"PPID":800,"TID":452,"UserId":0,"ProcessName":"\\Device\\HarddiskVolume2\\Windows\\System32\\svchost.exe","Method":"NtAssociateWaitCompletionPacket","EventUID":"0x1","Module":"nt","vCPU":0,"CR3":"0x7634f002","Syscall":146,"NArgs":0,"PreviousMode":"User","FromModule":"\\Windows\\System32\\ntdll.dll","FromParentModule":null}`
+	if _, ok := ParseDrakvufLine("vm", []byte(line)); ok {
+		t.Fatal("syscall events should be skipped — they are too noisy for evidence")
+	}
+	// sysret too.
+	retLine := `{"Plugin":"sysret","TimeStamp":"1788163848.678172","PID":1020,"PPID":728,"TID":980,"UserId":1,"ProcessName":"\\Device\\HarddiskVolume2\\Windows\\System32\\dwm.exe","Method":"NtRemoveIoCompletionEx","EventUID":"0x3","Module":"nt","vCPU":1,"CR3":"0x1c649001","Syscall":383,"Ret":"0x0","Info":"STATUS_SUCCESS"}`
+	if _, ok := ParseDrakvufLine("vm", []byte(retLine)); ok {
+		t.Fatal("sysret events should be skipped")
+	}
+}
+
+func TestWindowsProcmonListingParsesCorrectly(t *testing.T) {
+	// Verbatim from DRAKVUF v1.1 on Windows Server 2025 (build 26100).
+	// Windows procmon listing uses RunningProcess with NT device paths.
+	line := `{"Plugin":"procmon","TimeStamp":"1788163808.979099","PID":384,"PPID":4,"RunningProcess":"\\Device\\HarddiskVolume2\\Windows\\System32\\smss.exe","Bitness":64}`
+	s, ok := ParseDrakvufLine("vm-dc01", []byte(line))
+	if !ok {
+		t.Fatal("Windows procmon listing did not parse")
+	}
+	if s.Action != "listed" {
+		t.Fatalf("listing classified as %q instead of listed", s.Action)
+	}
+	if s.Process != `\Device\HarddiskVolume2\Windows\System32\smss.exe` {
+		t.Fatalf("process name wrong: %q", s.Process)
+	}
+	if s.PID != 384 || s.PPID != 4 {
+		t.Fatalf("PIDs wrong: %d/%d", s.PID, s.PPID)
+	}
+	e := SightingToEvent(s, "t", "s", "windows/dc")
+	if e.SeverityID != event.SeverityInformational {
+		t.Fatalf("listing severity should be informational, got %d", e.SeverityID)
+	}
+}
+
 func TestTriggeredExecStillHighAfterListingFix(t *testing.T) {
 	// A real triggered exec (ProcessName present, Windows-style) must still be
 	// the high-signal event it was -- the listing fix must not dull it.

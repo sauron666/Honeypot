@@ -112,8 +112,26 @@ DRAKVUF v1.1 **тръгна живо** на реален хардуер: **i5-10
 - **Хардуер:** i3-9100T (Coffee Lake) няма VMFUNC → DRAKVUF не тръгва; Ice Lake+
   го има. libvmi и `vmi-dump-memory` работят и без VMFUNC.
 
-Остатъчна стъпка за пълно VMI: Windows guest + ISF профил. Всичко останало е
-живо потвърдено.
+## Windows валидация (2026-08-31)
+
+Windows Server 2025 (build 26100, RTM) HVM guest на същия хардуер. ISF профил
+генериран от PDB (ntkrnlmp.pdb, GUID B6CDAA3A...) чрез volatility3 pdbconv.
+
+**Пълна VMI интроспекция потвърдена:**
+
+| Plugin | Събития (80s) | Какво дава |
+|--------|-------------|------------|
+| regmon | 11 533 | всяка промяна в регистъра (persistence, config) |
+| filetracer | 190 | файлови операции (create, delete, write) |
+| procmon (triggered) | 230 | нови процеси с ProcessName/UserId/TID |
+| procmon (listing) | 42 | инвентар при attach |
+
+Парсерът валидиран срещу двата формата: `RunningProcess` → `Action:"listed"`
+(inventory), `ProcessName` → `Action:"exec"` (атакуващо действие). Syscall/sysret
+plugin-ите са нарочно пропуснати — хиляди в секунда, прекалено шумни за evidence
+chain. 20 теста покриват парсера, включително два с verbatim Windows JSON.
+
+Всичко е живо потвърдено. VMI наблюдението е production-ready на подходящ хардуер.
 
 ## Последици
 
