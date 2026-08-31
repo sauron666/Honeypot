@@ -31,6 +31,7 @@ var NAV = [
   { id: 'identity',    icon: '⚿', label: 'Identity / BEC' },
   { id: 'wireless',    icon: '☊', label: 'BYOD / Wireless' },
   { id: 'feed',        icon: '⇄', label: 'Global Feed' },
+  { id: 'alerting',    icon: '⚑', label: 'Alerting' },
   { id: 'config',      icon: '⊡', label: 'Configuration' },
   { id: 'about',       icon: '⊙', label: 'About / Status' },
 ];
@@ -309,6 +310,7 @@ var VIEWS = {
   identity:    viewIdentity,
   wireless:    viewWireless,
   feed:        viewFeed,
+  alerting:    viewAlerting,
   config:      viewConfig,
   about:       viewAbout,
 };
@@ -2918,6 +2920,118 @@ function viewFeed(c) {
       tbl.appendChild(tb); body.appendChild(tbl);
     }
     panel.appendChild(body); c.appendChild(panel);
+  });
+}
+
+// ================================================================
+// VIEW: ALERTING (live sink management + threshold)
+// ================================================================
+
+function viewAlerting(c) {
+  return api('/api/sinks').then(function (data) {
+    c.replaceChildren();
+
+    // --- Threshold ---
+    var tp = el('div', 'panel');
+    tp.appendChild(panelHead('Alert threshold'));
+    var tb = el('div', 'panel-body padded');
+    tb.appendChild(el('div', 't-sec',
+      'Only events at or above this severity are forwarded (plus honeytoken hits and accepted logins, always). Lower it during an incident, raise it when tuning.'));
+    var trow = el('div', 'form-row'); trow.style.marginTop = '10px';
+    var sevSel = el('select', 'f-select');
+    ['informational', 'low', 'medium', 'high', 'critical', 'fatal'].forEach(function (s) {
+      var o = new Option(s, s); if (s === data.min_severity) o.selected = true; sevSel.appendChild(o);
+    });
+    var setBtn = el('button', 'btn btn-primary', 'Set threshold');
+    setBtn.addEventListener('click', function () {
+      api('/api/sinks/severity', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ min_severity: sevSel.value }),
+      }).then(function (r) { toast('Threshold set to ' + r.min_severity, 'ok'); })
+        .catch(function (e) { toast(e.message, 'err'); });
+    });
+    trow.appendChild(sevSel); trow.appendChild(setBtn);
+    tb.appendChild(trow);
+    tp.appendChild(tb); c.appendChild(tp);
+
+    // --- Current sinks ---
+    var sp = el('div', 'panel'); sp.style.marginTop = '16px';
+    sp.appendChild(panelHead('Alert sinks',
+      el('button', 'btn btn-sm btn-secondary', 'Send test alert')));
+    sp.querySelector('button').addEventListener('click', function () {
+      api('/api/sinks/test', { method: 'POST' }).then(function (r) {
+        var results = r.results || [];
+        if (!results.length) { toast('No sinks configured to test', 'err'); return; }
+        results.forEach(function (res) {
+          toast(res.sink + ': ' + (res.ok ? 'delivered' : 'FAILED — ' + res.error), res.ok ? 'ok' : 'err');
+        });
+      }).catch(function (e) { toast(e.message, 'err'); });
+    });
+    var sb = el('div', 'panel-body');
+    sb.appendChild(el('div', 't-sec padded', data.note || ''));
+    var sinks = data.sinks || [];
+    if (!sinks.length) {
+      sb.appendChild(emptyState('No alert sinks. Alarms are recorded in the evidence store but not forwarded anywhere. Add one below.'));
+    } else {
+      var tbl = el('table', 'tbl'); var th = el('thead'); var hr = el('tr');
+      ['Driver', 'Kind', 'Summary', ''].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+      th.appendChild(hr); tbl.appendChild(th);
+      var tbody = el('tbody');
+      sinks.forEach(function (s) {
+        var tr = el('tr');
+        tr.appendChild(el('td', null, s.name));
+        tr.appendChild(el('td', 'narrow', s.kind));
+        tr.appendChild(el('td', null, s.summary || '-'));
+        var actTd = el('td', 'narrow');
+        var rm = el('button', 'btn-link t-err', 'remove');
+        rm.addEventListener('click', function () {
+          confirmModal('Remove sink', 'Stop forwarding alerts to "' + s.name + '"? Evidence already stored is kept.').then(function (ok) {
+            if (!ok) return;
+            api('/api/sinks/' + s.index, { method: 'DELETE' }).then(function () {
+              toast('Removed ' + s.name, 'ok');
+              viewAlerting(c).catch(function (e) { toast(e.message, 'err'); });
+            }).catch(function (e) { toast(e.message, 'err'); });
+          });
+        });
+        actTd.appendChild(rm); tr.appendChild(actTd);
+        tbody.appendChild(tr);
+      });
+      tbl.appendChild(tbody); sb.appendChild(tbl);
+    }
+    sp.appendChild(sb); c.appendChild(sp);
+
+    // --- Add a sink ---
+    var ap = el('div', 'panel'); ap.style.marginTop = '16px';
+    ap.appendChild(panelHead('Add a sink'));
+    var ab = el('div', 'panel-body padded');
+    ab.appendChild(el('div', 't-sec',
+      'Point alarms at a SIEM/webhook live. Config is the driver’s JSON (e.g. webhook: {"url":"https://..."}; syslog: {"address":"host:514"}).'));
+    var arow = el('div', 'form-row'); arow.style.marginTop = '10px';
+    var drvSel = el('select', 'f-select');
+    (data.available || []).forEach(function (d) { drvSel.appendChild(new Option(d, d)); });
+    arow.appendChild(drvSel);
+    ab.appendChild(arow);
+    var cfgTa = el('textarea', 'f-input');
+    cfgTa.style.width = '100%'; cfgTa.style.minHeight = '90px'; cfgTa.style.marginTop = '10px';
+    cfgTa.style.fontFamily = 'var(--mono)'; cfgTa.style.fontSize = '12px';
+    cfgTa.placeholder = '{\n  "url": "https://siem.example/hook"\n}';
+    cfgTa.value = '{}';
+    ab.appendChild(cfgTa);
+    var addBtn = el('button', 'btn btn-primary', 'Add sink'); addBtn.style.marginTop = '10px';
+    addBtn.addEventListener('click', function () {
+      var cfg;
+      try { cfg = JSON.parse(cfgTa.value || '{}'); }
+      catch (e) { toast('Config is not valid JSON: ' + e.message, 'err'); return; }
+      api('/api/sinks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driver: drvSel.value, config: cfg }),
+      }).then(function (r) {
+        if (r.warning) toast(r.warning, 'err'); else toast('Added ' + r.added + ' sink', 'ok');
+        viewAlerting(c).catch(function (e) { toast(e.message, 'err'); });
+      }).catch(function (e) { toast(e.message, 'err'); });
+    });
+    ab.appendChild(addBtn);
+    ap.appendChild(ab); c.appendChild(ap);
   });
 }
 

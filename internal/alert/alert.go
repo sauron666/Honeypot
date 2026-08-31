@@ -69,6 +69,82 @@ func (d *Dispatcher) AddSink(s drivers.SinkDriver) {
 	d.sinks = append(d.sinks, s)
 }
 
+// SinkInfos returns each registered sink's driver info, in order. It is what the
+// console lists; it carries no secrets (the Info summary is driver-authored and
+// redacted), only which destinations are wired.
+func (d *Dispatcher) SinkInfos() []drivers.Info {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]drivers.Info, 0, len(d.sinks))
+	for _, s := range d.sinks {
+		out = append(out, s.Info())
+	}
+	return out
+}
+
+// RemoveSinkAt drops the sink at index i (as listed by SinkInfos). It reports
+// whether an index was in range. Removing a sink only stops future delivery;
+// evidence already in the store is untouched.
+func (d *Dispatcher) RemoveSinkAt(i int) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if i < 0 || i >= len(d.sinks) {
+		return false
+	}
+	d.sinks = append(d.sinks[:i], d.sinks[i+1:]...)
+	return true
+}
+
+// MinSeverity reports the current alerting threshold.
+func (d *Dispatcher) MinSeverity() event.Severity {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.minSeverity
+}
+
+// SetMinSeverity changes the threshold at runtime, so an operator can turn the
+// alarm volume up during an incident or down when tuning, without a restart.
+func (d *Dispatcher) SetMinSeverity(s event.Severity) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.minSeverity = s
+}
+
+// TestResult reports how one sink handled a test alert.
+type TestResult struct {
+	Sink  string `json:"sink"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// SendTest delivers a clearly-marked synthetic alert to every sink, so an
+// operator can confirm the wiring reaches their SIEM before relying on it in an
+// incident. The alert is stamped synthetic so it is never mistaken for real.
+func (d *Dispatcher) SendTest(ctx context.Context) []TestResult {
+	d.mu.RLock()
+	sinks := append([]drivers.SinkDriver(nil), d.sinks...)
+	d.mu.RUnlock()
+
+	a := drivers.Alert{
+		ID:          "test-" + time.Now().UTC().Format("20060102T150405Z"),
+		Time:        time.Now(),
+		Severity:    event.SeverityHigh.String(),
+		Title:       "MIRAGE test alert",
+		Description: "Synthetic test alert from the operator console. If you can see this in your SIEM, alert delivery works. No intrusion occurred.",
+		Fields:      map[string]any{"synthetic": true, "source": "console-test"},
+	}
+	out := make([]TestResult, 0, len(sinks))
+	for _, s := range sinks {
+		r := TestResult{Sink: s.Info().Name, OK: true}
+		if err := s.Send(ctx, a); err != nil {
+			r.OK = false
+			r.Error = err.Error()
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // Handle considers one event for alerting. It is safe to wire directly to the
 // bus; delivery happens inline, so sinks must be fast or buffered.
 func (d *Dispatcher) Handle(ctx context.Context, e *event.Event) {
