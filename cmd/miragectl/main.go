@@ -72,6 +72,11 @@ commands:
   vms         list full-OS decoys, and burn or reset one during an incident
   images      image library: import/list/retag/remove and sanitise decoy images
   packs       Deception Packs: list/show/apply/sign/verify bundled deception content
+  saasid      SaaS/identity deception: honey Entra/Okta/Workspace accounts + audit-log watch
+  bec         email/BEC deception: honey finance identities; analyze a received message
+  analyst     summarise an engagement with the offline template or a local LLM (needs review)
+  feed        global feed: export anonymized TTPs (signed) or import/merge feeds
+  wireless    BYOD/rogue-device deception: honey mDNS/DNS-SD devices + recon detection
   status      query a running director over its API
   version     print the version
 
@@ -140,6 +145,16 @@ func main() {
 		err = imagesCmd(args)
 	case "packs":
 		err = packsCmd(args)
+	case "saasid":
+		err = saasidCmd(args)
+	case "bec":
+		err = becCmd(args)
+	case "analyst":
+		err = analystCmd(args)
+	case "feed":
+		err = feedCmd(args)
+	case "wireless":
+		err = wirelessCmd(args)
 	case "status":
 		err = status(args)
 	case "version":
