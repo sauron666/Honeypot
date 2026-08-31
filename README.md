@@ -12,14 +12,15 @@ MIRAGE е платформа за **active defense / deception**: изолира
 
 | Способност | Commercial deception (типично) | MIRAGE |
 |---|---|---|
-| Тип примамка | предимно емулирани/контейнерни услуги | **истински пълни OS** (KVM/Proxmox) + емулирана ферма за мащаб |
-| Наблюдение | in-guest агент или само лог на услугата | **agentless VMI** (hypervisor introspection) — няма какво да убиеш/намериш |
-| Форензика | alert + няколко полета | пълна сесия: PCAP-NG, TLS keys, keystrokes, RDP видео, memory dump, artefact chain |
-| Реализъм | празни машини, нови артефакти | **Life Engine** — синтетични потребители, стари timestamps, реален event log, реален browser history |
-| Ransomware | alert при първи докоснат файл | FUSE tarpit + **прихващане на симетричния ключ** от паметта + авто-snapshot/revert |
-| Identity deception | статични фалшиви акаунти | AD/ADCS honeytokens: kerberoast/AS-REP/DCSync/ESC1 капани, автогенерирани от реалната схема |
-| Output | alert към SIEM | **автогенерирани Sigma/YARA/Suricata правила + STIX/MISP** от наблюдаваното поведение |
-| Екосистема | заключена във вендора | open SOC stack: Velociraptor, Wazuh/Elastic/Splunk, Suricata, Zeek, TheHive, MISP, OpenCTI |
+| Тип примамка | предимно емулирани/контейнерни услуги | **истински пълни OS** (KVM/Proxmox, vSphere/Hyper-V експериментално) + емулирана ферма за мащаб |
+| Наблюдение | in-guest агент или само лог на услугата | **agentless VMI** на Xen (нищо в госта) **+ in-guest сензор на всеки хипервайзор** (Sysmon/auditd — стандартна телеметрия, не tell) |
+| Форензика | alert + няколко полета | пълна сесия: **keystroke replay** (asciinema), memory dump (VMI), append-only artefact chain, **ed25519 seal + RFC 3161 timestamp** (съдебно проверимо). *PCAP-NG/TLS keys/RDP видео — планирани.* |
+| Реализъм | празни машини, нови артефакти | **Life Engine** — синтетични логини, стари timestamps, реален auth.log/lastLogon, детерминистичен (без горутина) |
+| Ransomware | alert при първи докоснат файл | **hypervisor-agnostic FUSE tarpit + snapshot-on-confirm** (всеки хипервайзор) + crypto-hook на ключа (Xen VMI). Потвърждение за 2-3 операции. |
+| Identity deception | статични фалшиви акаунти | AD honeytokens: kerberoast/AS-REP с **crackable hash**, ADCS/LAPS капани; автогенерирани, LDAP и Kerberos четат един каталог |
+| Output | alert към SIEM | **автогенерирани Sigma/Suricata/YARA + STIX/TheHive/IOC** от наблюдаваното поведение |
+| Съответствие | — | одит срещу **NIS2/DORA/ISO 27001/PCI/SOC2/IEC 62443**; способност→контрол |
+| Екосистема | заключена във вендора | 8 драйверни интерфейса (ADR-008); всеки SIEM/SOAR през syslog/ECS/OCSF/STIX |
 
 ## Документация
 
@@ -44,12 +45,17 @@ MIRAGE не е обвързан с конкретна инфраструктур
 през осем драйверни интерфейса (`docs/10-INTEGRATIONS.md`), а начинът на внедряване
 се избира от профил (`docs/06-DEPLOYMENT-PROFILES.md`):
 
-- **Compute:** KVM/libvirt, Proxmox, vSphere, Hyper-V, Nutanix, XCP-ng, AWS/Azure/GCP,
-  Kubernetes, Podman — или изобщо без хипервайзор ("honeypot в кутия").
-- **Мрежа:** inline (реални VLAN-и), **overlay** (WireGuard, без никаква промяна в
-  мрежата) или cloud (SG/NSG).
-- **Идентичност:** AD/ADCS, Entra ID, Okta, Google Workspace, FreeIPA, Keycloak.
-- **Изход:** всеки SIEM/SOAR/EDR/TI през syslog, ECS, OCSF, CEF, STIX.
+- **Compute (реализирани):** `inproc` ("honeypot в кутия"), `podman`, `libvirt`/KVM,
+  `proxmox` (field-proven на PVE 8.4), `vsphere` и `hyperv` (experimental — чакат
+  жива валидация). *Планирани:* Nutanix, XCP-ng, AWS/Azure/GCP, Kubernetes.
+- **Наблюдение:** `drakvuf` (agentless VMI, Xen) и `agent` (in-guest сензор, всеки
+  хипервайзор). Ransomware trap-ът работи навсякъде независимо от compute драйвера.
+- **Мрежа:** inline (реални VLAN-и през `nftables`), **overlay** (собствен mTLS тунел,
+  без никаква промяна в мрежата), `freeradius` NAC (CoA към deception VLAN).
+- **Идентичност (реализирано):** фалшива AD (LDAP + истински KDC). *Планирани:*
+  Entra ID, Okta, Google Workspace, FreeIPA, Keycloak.
+- **Изход:** всеки SIEM/SOAR/TI през `stdout`/`file`/`webhook`/`syslog`/`elastic`/`splunk`
+  + STIX/TheHive/IOC износ.
 
 Целта е **10 минути до първата примамка** в най-простия профил.
 
@@ -64,9 +70,9 @@ make build
 # конзолата: http://127.0.0.1:8422
 ```
 
-Това вдига три примамки с последователни идентичности (уеб сървър, база данни,
-NAS) на девет порта. Всяко докосване се записва, зашива се в hash chain и се
-свързва в engagement.
+Това вдига шест примамки с последователни идентичности (уеб сървър, база данни,
+NAS, файлов сървър, домейн контролер, PLC) на 22 порта. Всяко докосване се
+записва, зашива се в hash chain и се свързва в engagement.
 
 Пробвай го срещу самия него:
 
@@ -184,12 +190,15 @@ baseline, но първо снимка на мръсното състояние 
 | `internal/store` | append-only evidence файл, възстановяване след рестарт, стриймваща проверка |
 | `internal/bus` | шина със subject matching; бавен consumer не блокира примамка |
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
-| `internal/drivers/compute` | `inproc`, `podman`, `libvirt` |
+| `internal/drivers/compute` | `inproc`, `podman`, `libvirt`, **`proxmox`** (REST+pvesh, field-proven PVE 8.4), **`vsphere`** и **`hyperv`** (experimental) |
 | `internal/drivers/fabric` | `nftables` (налага и проверява), `probe` (проверява реалността, не правилата) |
-| `internal/drivers/observer` | `none` + `drakvuf` — agentless наблюдение вътре в пълна VM примамка (процеси/файлове/регистри/инжекции); parsing и mapping готови, hypervisor-glue предстои |
-| `internal/farm` | **пълни VM примамки**: provisioner, baseline snapshot, reset след engagement, **burn** (запазва компрометираната машина като доказателство) |
+| `internal/drivers/observer` | `none` + **`drakvuf`** (agentless VMI, Xen — **живо валидиран на Windows Server 2025 и Linux**) + **`agent`** (in-guest сензор, всеки хипервайзор) |
+| `internal/drivers/nac` | `none` + **`freeradius`** (RADIUS CoA — насочва непознато устройство към deception VLAN) |
+| `internal/farm` | **пълни VM примамки**: provisioner, baseline snapshot, reset след engagement, start/stop, **burn** (запазва компрометираната машина като доказателство) |
+| `internal/fusetrap` | **hypervisor-agnostic ransomware trap**: FUSE bait дял → детектор + tarpit + snapshot-on-confirm (всеки хипервайзор) |
+| `internal/catalog` | **библиотека с образи**: внасяне на ISO/OVA/OVF/qcow2/vmdk, difficulty tiers, саниране (маха CTF флагове, ресетва креденшъли, watermark) |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog` (RFC 5424), `elastic`, `splunk` |
-| `internal/honeyd` | 16 протокола: **ssh** (истински), **ldap** (фалшив AD), **kerberos** (истински KDC: AS-REP/kerberoast с crackable hash), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **tokens**, **generic** |
+| `internal/honeyd` | 17 протокола: **ssh** (истински), **ldap** (фалшив AD), **kerberos** (истински KDC: AS-REP/kerberoast с crackable hash), **smb** (NetNTLMv2 улов), **http**, **telnet**, **ftp**, **redis**, **mysql**, **mssql**, **vnc**, **smtp**, **snmp** (UDP), **modbus** (ICS), **mcp** (honey MCP/AI сървър), **tokens**, **generic** |
 | `internal/honeyd` персони | `linux/web`, `linux/db`, `linux/backup`, `linux/fileserver` (генериран дял с canary файлове), `windows/dc` (фалшива AD с kerberoast/AS-REP/ADCS/LAPS примамки) |
 | `internal/tokens` | honeytokens: 8 типа, callback приемник, watcher за подхвърлени стойности, генератор на .docx |
 | `internal/forge` | **автогенериране на Sigma / Suricata / YARA / STIX + инцидентен доклад** |
@@ -199,31 +208,41 @@ baseline, но първо снимка на мръсното състояние 
 | `internal/alert` | праг по severity, дедупликация, линк към engagement |
 | `internal/presence` | **overlay режим**: примамки в чужд сегмент без промяна на мрежата; **взаимен TLS** + собствен CA |
 | `internal/life` | **синтетичен живот**: логини, логове и lastLogon, които напредват във времето — примамката изглежда обитаема и все по-обитаема при всяка проверка |
-| `internal/api` | REST API + операторска конзола (вграден UI, строг CSP) |
+| `internal/compliance` | одит срещу **NIS2/DORA/ISO 27001/PCI/SOC2/IEC 62443**; способност→контрол, markdown доклад |
+| `internal/export` | STIX 2.1 bundle, TheHive alert, дедупликиран IOC списък |
+| `internal/vault` | **ed25519 seal на chain head + RFC 3161 timestamp** — веригата е проверима от трета страна |
+| `internal/graph`, `internal/toolkit`, `internal/insider`, `internal/watermark`, `internal/fleet`, `internal/replay` | attack-path deception, attacker toolkit DB, insider-threat kit, watermarking, авто-ротация на идентичности, SSH session replay (asciinema) |
+| `internal/api` | **REST API (39 endpoint-а) + операторска конзола (17-секционен SPA, строг CSP, textContent-only)** |
 | `cmd/mirage-presence` | Presence Agent — поема свободни адреси и тунелира към хъба |
 | `cmd/mirage-breadcrumbs` | **Breadcrumbs агент** — подхвърля следи на реален endpoint (.rdp, ~/.aws, ssh config, история), които водят право в honeynet-а; всяка следа носи honeytoken |
-| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, **presence-ca**, **vms**, **vault**, status |
+| `cmd/mirage-sensor` | **in-guest колектор** — Linux netlink process connector / Windows Sysmon → agent observer (всяка команда вътре в full-OS декой на всеки хипервайзор) |
+| `cmd/miragectl` | doctor, **plan**, **apply**, personas, services, drivers, verify, events, tokens, **forge**, **assure**, **fingerprint**, **presence-ca**, **vms**(+**smoketest**), **images**, economics, **export**, **compliance**, **insider**, **fleet**, **graph**, **toolkit**, **watermark**, **replay**, **vault**, status |
 
 Тестове: unit за всеки пакет + end-to-end сценарий с пълна атакова верига
 (`test/e2e`), всичко под `-race`.
 
-## Какво НЕ работи още
+## Какво НЕ работи още (честно)
 
-VMI observer-ът (DRAKVUF/libvmi) е наполовина: парсването на изхода и мапването
-към събития са готови и тествани, но hypervisor-glue-ът (спускане на drakvuf,
-attach към Xen домейн) изисква Xen dom0 хост и още не е валидиран — виж
-`docs/adr/ADR-010-vmi-observer.md`.
-
-Пълните VM примамки са реализирани откъм платформата — provisioner, containment
-gate, baseline, reset, burn — но **самите образи не се доставят**. Профил P4
-очаква libvirt шаблони, които вече съществуват на хоста; MIRAGE ги клонира, не
-ги строи. Има и `proxmox` драйвер в плана, но още го няма.
-
-SMB покрива negotiate, session setup (с улов на NetNTLMv2) и tree connect;
-файловите операции връщат ACCESS_DENIED. Сервирането на файлове по SMB2
-изисква валидация срещу истински Windows клиенти, преди да е честно да се
-твърди — затова ransomware двигателят засега гледа FTP дяла. Пътната карта и редът на изпълнение: `docs/07-ROADMAP.md`.
+- **agentless VMI е заключен за Xen + VMFUNC CPU.** DRAKVUF glue-ът е готов и
+  **живо валидиран** (Windows Server 2025, Linux), но иска Xen dom0 на CPU с
+  altp2m (Ice Lake+; Coffee/Comet Lake го нямат). На KVM/VMware/Hyper-V пълната
+  видимост идва от **in-guest сензора** (`agent`), не от VMI. KVM-VMI (KVMi) иска
+  пачнат хост — lab-tier, не се доставя.
+- **`vsphere` и `hyperv` драйверите са experimental** — unit-тествани срещу
+  синтетични отговори, чакат жива валидация (`miragectl vms smoketest`). Proxmox
+  и libvirt/KVM са проверени.
+- **Ransomware детекторът** се храни от FTP дяла и **FUSE trap-а** (hypervisor-
+  agnostic). SMB2 вече сервира файлове (create/read/write/dir + NetNTLMv2 улов),
+  но записите по SMB се записват, не се скорират — детекцията е през trap-а.
+- **Не са реализирани:** PCAP-NG / TLS session keys / RDP видео запис; cloud compute
+  драйвери (AWS/Azure/GCP), Kubernetes, Nutanix, XCP-ng; не-AD идентичност (Entra/
+  Okta/…); multi-tenancy / SSO-SAML; Plugin SDK (gRPC). Виж `docs/07-ROADMAP.md`.
+- **Образите не се дистрибутират** — библиотеката ги внася по път и ги санира;
+  ти доставяш образа (HTB/собствен). Има cloud-init Ubuntu 24.04 шаблон.
 
 ## Статус
 
-**Фаза 0 завършена, фаза 1 почти завършена.** Продуктът е използваем днес в профил P0.
+**Фаза 0 и 1 завършени; продуктът е използваем и продаваем днес в профил P0**
+(в кутия + емулирани + ransomware trap + in-guest сензор), с Proxmox за пълни VM
+примамки. Остават хардуерни валидации (Xen dom0, vsphere/hyperv на жив хост).
+~46 600 реда Go, 438 тестови функции, целият сюит зелен под `-race`.

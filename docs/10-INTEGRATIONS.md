@@ -5,9 +5,12 @@
 > архитектура. Това е разликата между "нашата лаборатория" и "продукт".
 >
 > **Реализирани драйвери** (към последния commit): Compute: `inproc`, `podman`,
-> `libvirt`, `proxmox` | Fabric: `nftables`, `probe` | Observer: `none`, `drakvuf`
-> (◐) | Sink: `stdout`, `file`, `webhook`, `syslog`, `elastic`, `splunk` | Останалите
-> категории (NAC, Identity, Forensics, Intel) имат интерфейси, но не и имплементации.
+> `libvirt`, `proxmox` (field-proven PVE 8.4), `vsphere` и `hyperv` (experimental) |
+> Fabric: `nftables`, `probe` | Observer: `none`, `drakvuf` (agentless VMI, живо
+> валидиран), `agent` (in-guest сензор) | NAC: `none`, `freeradius` (RADIUS CoA) |
+> Sink: `stdout`, `file`, `webhook`, `syslog`, `elastic`, `splunk`. Identity,
+> Forensics, Intel категориите имат интерфейси, но не и имплементации (Intel се
+> покрива функционално от `internal/export` — STIX/TheHive/IOC).
 > Таблиците по-долу са **проектен план** — ● означава "планиран първи клас", не
 > "реализиран"; виж `miragectl drivers` за живия списък.
 
@@ -37,11 +40,11 @@ type IntelDriver     interface { /* Enrich, Publish — TI платформи */
 ### ComputeDriver — къде живеят примамките
 | Драйвер | Статус | Ниво на примамка | Забележка |
 |---|---|---|---|
-| libvirt/KVM | ● ф.0 | L0–L4 | референтна имплементация, пълен VMI |
-| Proxmox VE | ● ф.0 | L0–L4 | API token, linked clones, ZFS snapshots |
-| Podman/Docker | ● ф.1 | L0–L2 | ферма за мащаб, без VMI |
-| VMware vSphere | ○ ф.5 | L0–L3 | VMI ограничено (без DRAKVUF) → fallback observer |
-| Hyper-V / SCVMM | ○ ф.5 | L0–L3 | fallback observer |
+| libvirt/KVM | ● | L0–L4 | референтна имплементация; agentless VMI иска Xen/KVMi → иначе in-guest `agent` |
+| Proxmox VE | ● **field-proven (PVE 8.4)** | L0–L4 | API token, linked clones, snapshots; наблюдение през in-guest `agent` + ransomware trap |
+| Podman/Docker | ● | L0–L2 | ферма за мащаб, без VMI |
+| VMware vSphere | ◐ **experimental** | L0–L3 | vCenter REST, adopt-first; наблюдение през in-guest `agent` |
+| Hyper-V / SCVMM | ◐ **experimental** | L0–L3 | PowerShell/SSH, adopt-first; наблюдение през in-guest `agent` |
 | Nutanix AHV | ○ | L0–L3 | AHV е KVM → VMI е възможно |
 | XCP-ng / Xen | ○ | L0–L4 | Xen е роден за libvmi — потенциално най-добър VMI |
 | AWS EC2 / Azure / GCP | ○ ф.6 | L0–L3 | ephemeral decoys, без VMI → eBPF/агент fallback |
@@ -83,10 +86,9 @@ type IntelDriver     interface { /* Enrich, Publish — TI платформи */
 ### ObserverDriver — дълбоко наблюдение
 | Драйвер | Статус | Дълбочина | Следа в госта |
 |---|---|---|---|
-| libvmi/DRAKVUF (KVM/Xen) | ● ф.2 | syscall, memory, crypto API | **нула** |
-| eBPF от хоста (Linux guest) | ● ф.2 | syscall, мрежа, файлове | нула |
-| Мрежова реконструкция | ● ф.0 | команди, файлове, екран | нула |
-| In-guest агент (само където няма избор) | ○ ф.5 | висока | видима — изисква явно включване |
+| libvmi/DRAKVUF (**само Xen** + VMFUNC CPU) | ● **живо валидиран** (Win Server 2025, Linux) | процеси, файлове, регистри, crypto hook, memory dump | **нула** |
+| Мрежова реконструкция (емулирани услуги) | ● | команди, keystroke replay (asciinema) | нула |
+| **In-guest `agent` сензор** (всеки хипервайзор) | ● **реализиран** (`mirage-sensor`: Linux netlink, Windows Sysmon) | процеси/команди/файлове | видима — стандартна телеметрия (Sysmon/auditd), не tell |
 | Ephemeral snapshot forensics | ○ ф.5 | post-hoc | нула — snapshot + офлайн анализ |
 
 ### ForensicsDriver / SinkDriver / IntelDriver

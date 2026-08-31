@@ -114,8 +114,13 @@ make build
 enumeration, spraying, AS-REP roast и kerberoast с crackable RC4-HMAC hash),
 `smb` (NetNTLMv2 улов), `http`, `telnet`, `ftp` (+ransomware engine), `redis`,
 `mysql` (верифицира подхвърлена парола от скрамбъла), `mssql` (възстановява
-паролата в чист текст), `vnc`, `smtp`, `snmp` (UDP), `modbus` (ICS), `tokens`
-(callback приемник), `generic`.
+паролата в чист текст), `vnc`, `smtp`, `snmp` (UDP), `modbus` (ICS), `mcp`
+(honey MCP/AI сървър — AI/LLM deception), `tokens` (callback приемник),
+`generic`. **17 регистрирани услуги** (`RegisterService`).
+
+**Незавършено (staged):** `internal/honeyd/jit.go` (JITSpawner — спуска временна
+услуга при probe на непривързан порт) е реализиран и тестван, но **не е wire-нат**
+в server-а (нула callers). Идея за бъдещо включване, не мъртъв код за триене.
 
 ### Персони (`internal/honeyd/persona_*.go`)
 

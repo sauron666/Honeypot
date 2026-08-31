@@ -1,5 +1,7 @@
 # 11 — Разширен каталог идеи
 
+> Легенда: ✅ реализирано · ◐ частично · без маркер = идея/предстои
+
 Оценка: **Diff** = колко ни отличава (1–5) · **Val** = стойност за клиента (1–5) ·
 **Eff** = усилие (1–5, 5 = много) · **Фаза** = къде влиза в роудмапа.
 
@@ -43,18 +45,23 @@
 | 3 Overlay режим + взаимен TLS + собствен CA | ✅ готово | `internal/presence`, `miragectl presence-ca` |
 | 5 Fingerprint Assurance (Detectability Score) | ✅ готово | `internal/assure`, `miragectl fingerprint` |
 | 7 Deception Assurance (синтетичен атакуващ) | ✅ готово | `internal/assure`, `miragectl assure` |
-| — Пълни VM примамки + containment gate + burn | ✅ готово (образи/proxmox драйвер не) | `internal/farm`, `internal/drivers/fabric`, профил P4 |
+| — Пълни VM примамки + containment gate + burn + start/stop | ✅ готово | `internal/farm`, `internal/drivers/fabric`, профил P4 |
 | — Истински Kerberos KDC (roast/spray/enum, crackable) | ✅ готово | `internal/honeyd/svc_kerberos.go` |
 | — Синтетичен живот (обитаемост във времето) | ✅ готово | `internal/life` |
 | — Breadcrumbs (следи на реални endpoint-и) ★ ново | ✅ готово | `internal/breadcrumbs`, `cmd/mirage-breadcrumbs` |
-| 4/ADR-004 VMI observer (agentless) | ◐ наполовина: parsing/mapping готови, hypervisor-glue остава | `internal/drivers/observer`, `docs/adr/ADR-010` |
+| 4/ADR-004 VMI observer (agentless) | ✅ готово (Xen) — **живо валидиран** на Windows Server 2025 и Linux; иска VMFUNC CPU | `internal/drivers/observer`, `docs/adr/ADR-010` |
+| — In-guest сензор (`agent`, всеки хипервайзор) ★ | ✅ готово | `internal/drivers/observer/agent.go`, `cmd/mirage-sensor` |
+| — Ransomware trap (FUSE tarpit + snapshot, hypervisor-agnostic) ★ | ✅ готово | `internal/fusetrap`, `docs/research/ransomware-tarpit.md` |
+| — Библиотека с образи (внасяне/difficulty/саниране) | ✅ готово | `internal/catalog`, `miragectl images` |
+| — vSphere / Hyper-V compute драйвери | ◐ experimental (чакат жива валидация) | `internal/drivers/compute/{vsphere,hyperv}.go` |
+| — mirage-vault (ed25519 seal + RFC 3161 timestamp) | ✅ готово | `internal/vault`, `miragectl vault` |
 | 4 Attack Path Deception (`mirage-graph`) | ✅ готово (Dijkstra + coverage + suggest) | `internal/graph` |
 | 8 Attacker Toolkit DB + предсказване | ✅ готово (12 сигнатури) | `internal/toolkit` |
 | 9 Deception за AI агенти / MCP ★ | ✅ honey MCP сървър + prompt-canary + LLM-key | `svc_mcp.go`, `canary.go`, breadcrumbs |
 | 10 Supply-chain / DevOps deception | частично: Breadcrumbs покрива CI/endpoint следи | `internal/breadcrumbs` |
 | — SMB файлови операции (ransomware по SMB) | ✅ готово | `internal/honeyd/smb_files.go` |
 | — Proxmox compute driver | ✅ готово | `internal/drivers/compute/proxmox.go` |
-| 6 Just-in-Time примамки (реактивно вдигане) | ✅ готово | `internal/honeyd/jit.go` |
+| 6 Just-in-Time примамки (реактивно вдигане) | ◐ кодът е готов и тестван, но **не е wire-нат** в server-а (staged) | `internal/honeyd/jit.go` |
 | 15 Cognitive Friction (web labyrinth) | ✅ web labyrinth (infinite scanner trap) | `internal/honeyd/svc_http.go` |
 | 17 Engagement Economics | ✅ готово | `internal/engagement`, `miragectl economics` |
 | 14 Watermarking (невидимо проследяване на изтичане) | ✅ готово (3 техники + extract) | `internal/watermark` |
@@ -90,7 +97,7 @@
 
 ---
 
-## 1. Deception-as-Code + GitOps
+## ✅ 1. Deception-as-Code + GitOps — реализирано в internal/config, internal/app
 Цялата измама се описва декларативно и се версионира.
 
 ```yaml
@@ -121,7 +128,7 @@ spec:
 - Git като източник на истина → одит, ревю, rollback, CI на самата измама.
 - Прави продукта **преносим между среди** — един и същ манифест на Proxmox и в AWS.
 
-## 2. Персони и общностни Deception Packs
+## ◐ 2. Персони и общностни Deception Packs — персоните реализирани в internal/honeyd/persona_*; общностният регистър предстои
 Примамката не е "Windows VM", а **персона**: роля, вертикал, държава, език,
 конвенция за имена, инсталиран софтуер, документи, потребителско поведение.
 
@@ -132,11 +139,11 @@ spec:
 - Пакетите се подписват и версионират; клиентът избира от каталог.
 - **Ключово за универсалност**: нула зашити български/американски допускания в кода.
 
-## 3. Overlay режим — примамки без промяна на мрежата
+## ✅ 3. Overlay режим — примамки без промяна на мрежата — реализирано в internal/presence
 Виж `docs/10 §4`. Най-важната функция за продаваемост: внедряване без мрежов проект.
 Presence Agent поема неизползвани IP-та в сегмента и тунелира към централните примамки.
 
-## 4. Attack Path Deception ★
+## ✅ 4. Attack Path Deception ★ — реализирано в internal/graph
 Не разхвърляй примамки на случаен принцип — сложи ги **точно на пътищата на атаката**.
 
 1. Пасивно построяване на граф на реалната среда: AD връзки (BloodHound-подобен
@@ -151,7 +158,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
 Това превръща deception от "лотария" в измерима математика. Никой open source
 продукт не го прави; комерсиалните го правят частично и непрозрачно.
 
-## 5. Fingerprint Assurance ★
+## ✅ 5. Fingerprint Assurance ★ — реализирано в internal/assure
 Модул, който **непрекъснато атакува собствените ни примамки** с известните техники
 за разпознаване на honeypot: Nmap NSE, Shodan Honeyscore логика, timing анализ,
 проверки за виртуализация, липса на потребителска активност, аномалии в event log,
@@ -163,7 +170,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
 Продажбено твърдение, което конкуренцията не смее да направи: *ние публикуваме
 доколко нашите примамки са разпознаваеми и го подобряваме всеки release.*
 
-## 6. Just-in-Time примамки
+## ◐ 6. Just-in-Time примамки — реактор в internal/honeyd/jit.go (още не е закачен към server)
 Реактивна измама: атакуващият сканира сегмент за MSSQL → в рамките на секунди в
 същия сегмент се появява MSSQL примамка на съседен IP. Търси backup сървър →
 появява се. Изброява споделени ресурси → появяват се примамени.
@@ -174,7 +181,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
   "интересни находки / примамка" се доближава до 100%.
 - Внимание срещу фингърпринт: закъснение и вариация, за да не изглежда "магично".
 
-## 7. Deception Assurance — синтетичен атакуващ
+## ✅ 7. Deception Assurance — синтетичен атакуващ — реализирано в internal/assure
 Вграден агент, който на график изпълнява безобидни атакови сценарии срещу
 примамките (Atomic Red Team стил) и проверява, че **цялата верига работи**:
 събитието е записано → корелирано → alert е изпратен → SIEM го е приел.
@@ -182,7 +189,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
 Мълчаливият honeypot е по-опасен от липсващия — създава фалшива сигурност.
 Това е евтина функция с огромна оперативна стойност (и отличен SLA аргумент).
 
-## 8. Attacker Toolkit DB + предсказване
+## ✅ 8. Attacker Toolkit DB + предсказване — реализирано в internal/toolkit
 Библиотека от отпечатъци на инструменти: nmap версии по TCP опции, Impacket
 сигнатури по DCERPC поведение, Cobalt Strike / Sliver / Havoc / Mythic профили,
 стил на PowerShell обфускация, ред на изброяващите команди, скорост на писане.
@@ -191,7 +198,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
 Следващата стъпка исторически е `secretsdump` към DC."
 → UI показва **прогноза** и предлага да постави примамка точно там (връзка с идея 6).
 
-## 9. Deception за AI агенти и MCP ★ (нова повърхност, никой не я покрива)
+## ◐ 9. Deception за AI агенти и MCP ★ (нова повърхност, никой не я покрива) — honey MCP сървър реализиран в internal/honeyd/svc_mcp.go; vector store / agent-in-the-middle предстоят
 През 2026 в мрежите работят автономни агенти — и легитимни, и вражески.
 
 - **Honey MCP сървър**: изглежда като вътрешен инструмент с достъп до "финанси";
@@ -205,7 +212,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
 - **Agent-in-the-middle**: примамка, която *отговаря* на автоматизиран атакуващ агент
   по начин, който го задържа и разкрива логиката му.
 
-## 10. Supply-chain / DevOps deception
+## ◐ 10. Supply-chain / DevOps deception — CI/endpoint следи чрез internal/breadcrumbs; dependency-confusion / honey CI runner / honey k8s предстоят
 - **Dependency confusion канари**: регистрираме вътрешните имена на пакети публично
   (npm/PyPI) като празни канарчета — всяко изтегляне означава, че някой е научил
   вътрешните ни имена или че билд машина е зле конфигурирана.
@@ -232,7 +239,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
   BEC опитите отиват при нас, не при истинския човек.
 - Автоматично извличане на инфраструктурата на кампанията + IOC към mail gateway.
 
-## 13. Insider-threat режим
+## ✅ 13. Insider-threat режим — реализирано в internal/insider
 Deception е най-добрият детектор за вътрешна заплаха: honey документи, видими
 само на определена група ("Съкращения_2026.xlsx"), honey БД записи, honey споделени
 папки. Достъпът до тях няма легитимно обяснение.
@@ -240,13 +247,13 @@ Deception е най-добрият детектор за вътрешна зап
 > Правна бележка (EU): изисква съгласуване със съвет на работниците/DPO. Продуктът
 > трябва да носи **готов шаблон за политика и DPIA**, иначе клиентът няма да го включи.
 
-## 14. Watermarking и проследяване на изтичане
+## ✅ 14. Watermarking и проследяване на изтичане — реализирано в internal/watermark
 Всеки генериран примамен документ носи невидим, уникален за получателя воден знак
 (zero-width символи, микро вариации в оформлението, стеганография в изображения).
 - Появи ли се документът в изтичане/darknet → знаем **коя** примамка/канал го е дал.
 - Доказва, че изтеклият файл е фалшив (важно при репутационна криза).
 
-## 15. Cognitive friction — легални tarpit-и
+## ◐ 15. Cognitive friction — легални tarpit-и — web labyrinth в internal/honeyd/svc_http.go + ransomware tarpit в internal/fusetrap; TCP/LaBrea tarpit предстои
 Целта е да откраднем време на атакуващия, без нито едно действие навън:
 - TCP tarpit (LaBrea-стил) на неизползвани IP-та;
 - безкраен web лабиринт за скенери (генерирани връзки, бавни отговори);
@@ -254,7 +261,7 @@ Deception е най-добрият детектор за вътрешна зап
 - SMB/LDAP отговори с огромни, бавни резултати.
 Измерваме и отчитаме: **колко часа атакуващ е изгорял** (идея 17).
 
-## 16. Compliance evidence пакет
+## ✅ 16. Compliance evidence пакет — реализирано в internal/compliance
 Автоматично картографиране на телеметрията към контроли и генериране на доказателства:
 **NIS2** (чл. 21 мерки за откриване и обработка на инциденти), **DORA**,
 **ISO 27001:2022** (A.8.16 мониторинг, A.5.7 threat intelligence),
@@ -262,7 +269,7 @@ Deception е най-добрият детектор за вътрешна зап
 Един бутон → PDF за одитора. Това е най-евтината функция с най-пряко влияние
 върху продажбите в регулирани сектори.
 
-## 17. Engagement Economics
+## ✅ 17. Engagement Economics — реализирано в internal/engagement (miragectl economics)
 Метрика на ниво борд: *"през Q3 примамките погълнаха 41 часа атакуващо време,
 върнаха 3 потвърдени инцидента и 0 фалшиви положителни."*
 Позволява да се сметне ROI — нещо, което SOC инструментите почти никога не дават.

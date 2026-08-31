@@ -29,11 +29,12 @@ func init() { RegisterService("smb", newSMB) }
 // offline. Responder built a whole discipline on this; here it is a side effect
 // of a decoy answering the door.
 //
-// Scope note: this implements negotiation, session setup and tree connect.
-// File operations return ACCESS_DENIED -- a completely ordinary outcome for an
-// account without share permissions. Serving files over SMB2 needs validation
-// against real Windows clients before it would be honest to claim it, so the
-// ransomware engine currently watches the FTP share instead.
+// Scope note: this implements negotiation, session setup, tree connect AND
+// file operations (create/read/write/close/query-directory, see smb_files.go),
+// so a client can browse and touch the bait share. Serving files over SMB2 is
+// validated against real clients by the tests; the ransomware detector runs
+// over the FTP share and the FUSE trap (internal/fusetrap), which is the
+// hypervisor-agnostic path, so SMB writes are recorded but not scored here.
 type smbSvc struct {
 	p          *Persona
 	domain     string

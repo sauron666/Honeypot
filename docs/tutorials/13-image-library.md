@@ -67,12 +67,60 @@ watermark-ът, hygiene командите (bash история, authorized_keys
 
 Забравя записа; **файлът на диска остава** (твой е).
 
+## Как да качиш образа на хипервайзора (ISO/OVA/VMDK)
+
+Каталогът **референцира по път** — образът трябва първо да е на хипервайзора,
+после `images import` го регистрира. Качването зависи от платформата:
+
+### Proxmox (KVM/QEMU)
+```bash
+# ISO → в ISO storage-а (за инсталация from scratch)
+scp box.iso root@pve:/var/lib/vz/template/iso/
+
+# qcow2/raw диск → внеси го в нова VM
+qm create 9001 --name box-template --memory 2048 --net0 virtio,bridge=vmbr0
+qm importdisk 9001 box.qcow2 local-lvm          # внася диска
+qm set 9001 --scsi0 local-lvm:vm-9001-disk-0
+qm template 9001                                 # прави го template за linked clone
+
+# OVA/OVF → разархивирай и внеси vmdk-то
+tar -xf box.ova && qm importovf 9001 box.ovf local-lvm
+```
+После: `miragectl images import --file /var/lib/vz/images/9001/... --format qcow2`
+и в манифеста `template: box-template` (proxmox драйверът клонира по име).
+
+### VMware vSphere
+```bash
+# OVA/OVF native — deploy през govc (или Web Client)
+govc import.ova -name=box-template box.ova
+# VMDK → качи в datastore
+govc datastore.upload box.vmdk box-template/box.vmdk
+```
+`template` в манифеста = името на VM-а/template-а; vsphere драйверът е adopt-first.
+
+### Hyper-V
+```powershell
+# VHDX → копирай на хоста, използвай като parent за differencing disk
+Copy-Item box.vhdx C:\Templates\box.vhdx
+# hyperv драйверът прави differencing disk от него при Create
+```
+`template` = пътят до parent VHDX-а.
+
+### libvirt/KVM директно
+```bash
+cp box.qcow2 /var/lib/libvirt/images/box-template.qcow2
+virsh define box-template.xml     # дефинирай template домейна
+```
+
+> **Формати:** KVM/Proxmox → qcow2/raw; VMware → OVA/OVF/VMDK; Hyper-V → VHDX.
+> Каталогът разпознава формата от разширението и го пази, за да знае драйверът
+> дали може да го консумира директно.
+
 ## Разгъни като декой
 
 Санираният образ се подава на пълна VM примамка през `template` в манифеста
 (виж [05](05-full-vm-decoys.md)). Каталогът пази пътя и формата, за да знае
-compute драйверът дали може да го консумира директно (KVM иска qcow2/raw;
-VMware иска OVA/VMDK).
+compute драйверът дали може да го консумира директно.
 
 ## Работен процес
 
