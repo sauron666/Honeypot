@@ -21,6 +21,7 @@ build:
 	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN)/miragectl       ./cmd/miragectl
 	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN)/mirage-presence ./cmd/mirage-presence
 	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN)/mirage-breadcrumbs ./cmd/mirage-breadcrumbs
+	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN)/mirage-sensor    ./cmd/mirage-sensor
 	@echo "built -> $(BIN)/"
 
 test:
@@ -53,7 +54,7 @@ run: build
 # One statically-linked binary per OS/arch, no CGO, so a customer copies a file
 # and runs it -- there is no runtime to install.
 PLATFORMS := linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64
-DISTBINS  := mirage-director miragectl mirage-presence mirage-breadcrumbs
+DISTBINS  := mirage-director miragectl mirage-presence mirage-breadcrumbs mirage-sensor
 
 dist:
 	@rm -rf dist && mkdir -p dist

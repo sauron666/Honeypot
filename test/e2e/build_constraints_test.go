@@ -32,6 +32,11 @@ func TestNoAccidentalPlatformConstraints(t *testing.T) {
 		// off Linux. This file is meant to be linux-only and carries an explicit
 		// //go:build linux as well.
 		"internal/fusetrap/fs_linux.go": "FUSE kernel binding is Linux-only by design",
+		// The in-guest sensor's collectors are genuinely per-OS: Linux uses the
+		// netlink process connector, Windows reads Sysmon. Both carry explicit
+		// //go:build tags; collect_other.go stubs the rest.
+		"cmd/mirage-sensor/collect_linux.go":   "netlink process connector is Linux-only",
+		"cmd/mirage-sensor/collect_windows.go": "Sysmon event-log collector is Windows-only",
 	}
 
 	root, err := filepath.Abs("../..")
