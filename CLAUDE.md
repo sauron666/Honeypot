@@ -42,9 +42,10 @@ vs path); topology секцията рисува цялата естейт ка�
 34 REST endpoint-а (10 нови: compliance, graph, topology, VM start/stop, system,
 fingerprint, observer status, observer dump).
 
-**Туториали** — `docs/tutorials/` (13 броя, български): quickstart, конзола,
+**Туториали** — `docs/tutorials/` (14 броя, български): quickstart, конзола,
 honeytokens, детекции, VM декои, VMI, overlay, AD/Kerberos, breadcrumbs,
-доказателства+vault, compliance+export, **ransomware trap**, **библиотека с образи**. Всеки показва GUI и
+доказателства+vault, compliance+export, **ransomware trap**, **библиотека с
+образи**, **хипервайзори**. Всеки показва GUI и
 CLI, където има смисъл. **Научен труд** за trap-а: `docs/research/ransomware-tarpit.md`.
 
 **Ransomware trap (hypervisor-agnostic)** — `internal/fusetrap`. DRAKVUF иска
@@ -73,7 +74,7 @@ make build
 | `internal/store` | append-only JSONL evidence, resume след рестарт, стрийм проверка |
 | `internal/bus` | шина, NATS-съвместим subject matching; `Close()` изчаква handler-ите |
 | `internal/drivers` | осемте абстракции + registry с capabilities (ADR-008) |
-| `internal/drivers/compute` | `inproc`, `podman`, `libvirt`, `proxmox` (REST API + pvesh CLI fallback) |
+| `internal/drivers/compute` | `inproc`, `podman`, `libvirt`, `proxmox` (REST + pvesh), `vsphere` (vCenter REST, **experimental**), `hyperv` (PowerShell/SSH, **experimental**) |
 | `internal/drivers/sink` | `stdout`, `file`, `webhook`, `syslog`, `elastic` (ECS), `splunk` (HEC) |
 | `internal/driverset` | регистрация на вградените драйвери (отделен пакет заради import cycle) |
 | `internal/honeyd` | фермата: 15 протокола, персони, виртуална ФС, shell, reconcile |
@@ -258,6 +259,13 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
 - **libvmi config ключ е `volatility_ist`, не `json_path`.** flex/bison
   парсерът в libvmi не разпознава `json_path` — получаваш "unknown config
   key" без ясно съобщение. ISF профил от dwarf2json се подава с `volatility_ist`.
+- **vsphere/hyperv драйверите са Experimental — казва се явно.** `Info().
+  Experimental=true` и Summary-то го пише. Unit-тествани срещу синтетичен
+  vCenter (httptest) и fake runner, но НЕ на жив хипервайзор. Има тест, който
+  гърми, ако някой махне флага. Не се твърди, че са field-proven (за разлика от
+  proxmox на PVE 8.4). `Create` при двата е **adopt-first**: осиновява
+  съществуваща VM по име, преди да клонира — честият workflow е операторът да
+  пре-създаде декоя, а MIRAGE да го управлява.
 - **Ransomware trap монтажът е best-effort.** `startTrap` логва warning и
   продължава при провал (не Linux, няма `/dev/fuse`, зает mountpoint) — director,
   който отказва да тръгне заради зает mountpoint, е по-лош от такъв без trap.
@@ -342,7 +350,11 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
    тогава". Tamper на файла проваля verify.
 6. **Multi-tenancy, SSO/SAML** — за MSSP канала.
 7. **Plugin SDK** — gRPC, HashiCorp go-plugin модел.
-8. **Допълнителни compute драйвери** — vSphere, Hyper-V (Phase 5).
+8. ~~**Допълнителни compute драйвери**~~ ✓ (structure) — `vsphere` (vCenter REST)
+   и `hyperv` (PowerShell/SSH) добавени, маркирани **experimental**: unit-тествани
+   срещу синтетични отговори, остава валидация на жив хипервайзор. libvirt/KVM и
+   proxmox покриват KVM пътя. **Ключово:** ransomware trap-ът и мониторингът
+   работят на всеки хипервайзор независимо от compute драйвера.
 
 Отхвърлени съзнателно (виж `docs/11-IDEAS.md`): hack-back, автоматично
 блокиране на IP към прод firewall, cloud-only контролер.
