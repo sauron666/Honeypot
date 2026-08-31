@@ -37,21 +37,44 @@ LDAP и Kerberos четат от **един и същ** `buildHoneyDirectory`. �
 `KRB5KRB_ERR_RESPONSE_TOO_BIG` (без e-text — иначе е amplification), точно както
 връща истински KDC.
 
+## Кои акаунти са примамка (в `windows/dc` персоната)
+
+Realm-ът е **`CORP.LOCAL`** (uppercase на домейна). Точните цели:
+
+| Акаунт | Тип примамка | Как се напада |
+|---|---|---|
+| `svc_legacy` | **AS-REP roastable** (pre-auth изключен) | AS-REQ без pre-auth → crackable AS-REP |
+| `svc_sql`, `svc_backup`, `svc_iis` | **kerberoastable** (имат SPN) | TGS-REQ с RC4 → crackable service ticket |
+| `m.petrova`, `g.ivanov`, `e.dimitrova`, `n.stoyanov`, `i.kolev` | обикновени (pre-auth ВКЛ) | само spray/guess — всеки опит се записва |
+
+svc_sql/svc_backup **изискват** pre-auth (AS-REP roast срещу тях връща
+`KDC_ERR_PREAUTH_REQUIRED` — точно като истински домейн); те се roast-ват през
+**Kerberoast**, не AS-REP. Единственият AS-REP roastable е `svc_legacy`.
+
 ## Тест с реални инструменти
 
+> **Портове:** impacket/Rubeus предполагат стандартните **88** (Kerberos) и
+> **389** (LDAP). p0 профилът кара на 8888/3389 (без root). За жив тест или
+> вдигни услугите на 88/389 (`CAP_NET_BIND_SERVICE`), или форуърдни:
+> `socat TCP-LISTEN:88,fork,reuseaddr TCP:127.0.0.1:8888` (и 389→3389).
+
 ```bash
-# AS-REP roast (impacket)
-GetNPUsers.py corp.local/ -dc-ip 127.0.0.1 -usersfile users.txt -no-pass
+# AS-REP roast — таргетирай svc_legacy, realm CORP.LOCAL
+echo svc_legacy | GetNPUsers.py CORP.LOCAL/ -dc-ip 127.0.0.1 -no-pass \
+  -usersfile /dev/stdin -format hashcat
 
-# Kerberoast (Rubeus/impacket)
-GetUserSPNs.py corp.local/decoyuser:pass -dc-ip 127.0.0.1 -request
+# Kerberoast — svc_sql/svc_backup/svc_iis имат SPN
+GetUserSPNs.py CORP.LOCAL/ -dc-ip 127.0.0.1 -no-preauth svc_legacy -request
 
-# crack-ни blob-а — паролата се намира, защото е crackable by design
-hashcat -m 18200 asrep.hash rockyou.txt
+# crack — паролата се намира, защото е crackable by design
+hashcat -m 18200 asrep.hash rockyou.txt    # AS-REP
+hashcat -m 13100 tgs.hash   rockyou.txt    # kerberoast
 ```
 
-Гледай конзолата: всеки от тези се появява като engagement с ATT&CK мапинг
-(T1558 Kerberoasting, T1110 spraying…).
+Гледай конзолата: всеки се появява като engagement с ATT&CK мапинг
+(T1558.004 AS-REP roasting, T1558.003 Kerberoasting, T1110 spraying…). Стойността
+е в **reuse-а**: watcher-ът свързва офлайн крака (hashcat намери паролата) с
+онлайн опит със същата парола другаде.
 
 ## Допълнителни примамки в персоната
 
