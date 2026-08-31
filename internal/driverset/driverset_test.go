@@ -55,7 +55,7 @@ func TestOpenIsIdempotent(t *testing.T) {
 func TestUnknownDriverErrorListsAlternatives(t *testing.T) {
 	r := Default()
 	defer r.Close()
-	_, err := r.Compute("vsphere", nil)
+	_, err := r.Compute("nonesuch", nil)
 	if err == nil {
 		t.Fatal("expected an error for an unregistered driver")
 	}
