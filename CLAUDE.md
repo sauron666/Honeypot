@@ -121,8 +121,9 @@ enumeration, spraying, AS-REP roast и kerberoast с crackable RC4-HMAC hash),
 `smb` (NetNTLMv2 улов), `http`, `telnet`, `ftp` (+ransomware engine), `redis`,
 `mysql` (верифицира подхвърлена парола от скрамбъла), `mssql` (възстановява
 паролата в чист текст), `vnc`, `smtp`, `snmp` (UDP), `modbus` (ICS), `mcp`
-(honey MCP/AI сървър — AI/LLM deception), `tokens` (callback приемник),
-`generic`. **17 регистрирани услуги** (`RegisterService`).
+(honey MCP/AI сървър — AI/LLM deception), `tarpit` (LaBrea-style sticky —
+trickle банер, задържа скенера, отчита погълнато време; idea 15), `tokens`
+(callback приемник), `generic`. **18 регистрирани услуги** (`RegisterService`).
 
 **Staged (нарочно unwired):** `internal/honeyd/jit.go` (JITSpawner — реактивно
 спуска временна услуга при probe на well-known порт). **Не е wire-нат** в server-а

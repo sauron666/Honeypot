@@ -62,7 +62,7 @@
 | — SMB файлови операции (ransomware по SMB) | ✅ готово | `internal/honeyd/smb_files.go` |
 | — Proxmox compute driver | ✅ готово | `internal/drivers/compute/proxmox.go` |
 | 6 Just-in-Time примамки (реактивно вдигане) | ◐ кодът е готов и тестван, но **не е wire-нат** в server-а (staged) | `internal/honeyd/jit.go` |
-| 15 Cognitive Friction (web labyrinth) | ✅ web labyrinth (infinite scanner trap) | `internal/honeyd/svc_http.go` |
+| 15 Cognitive Friction (tarpits) | ✅ web labyrinth + ransomware tarpit + **TCP/LaBrea tarpit** | `svc_http.go`, `internal/fusetrap`, `svc_tarpit.go` |
 | 17 Engagement Economics | ✅ готово | `internal/engagement`, `miragectl economics` |
 | 14 Watermarking (невидимо проследяване на изтичане) | ✅ готово (3 техники + extract) | `internal/watermark` |
 | 16 Compliance evidence (NIS2/DORA/ISO/PCI/SOC2/IEC) | ✅ готово | `internal/compliance` |
@@ -258,7 +258,7 @@ Deception е най-добрият детектор за вътрешна зап
 - Появи ли се документът в изтичане/darknet → знаем **коя** примамка/канал го е дал.
 - Доказва, че изтеклият файл е фалшив (важно при репутационна криза).
 
-## ◐ 15. Cognitive friction — легални tarpit-и — web labyrinth в internal/honeyd/svc_http.go + ransomware tarpit в internal/fusetrap; TCP/LaBrea tarpit предстои
+## ✅ 15. Cognitive friction — легални tarpit-и — web labyrinth (svc_http.go) + ransomware tarpit (internal/fusetrap) + **TCP/LaBrea tarpit** (svc_tarpit.go: sticky connection, trickle banner, отчита погълнатото време)
 Целта е да откраднем време на атакуващия, без нито едно действие навън:
 - TCP tarpit (LaBrea-стил) на неизползвани IP-та;
 - безкраен web лабиринт за скенери (генерирани връзки, бавни отговори);
