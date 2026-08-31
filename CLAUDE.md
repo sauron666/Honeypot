@@ -42,9 +42,9 @@ vs path); topology секцията рисува цялата естейт ка�
 34 REST endpoint-а (10 нови: compliance, graph, topology, VM start/stop, system,
 fingerprint, observer status, observer dump).
 
-**Туториали** — `docs/tutorials/` (12 броя, български): quickstart, конзола,
+**Туториали** — `docs/tutorials/` (13 броя, български): quickstart, конзола,
 honeytokens, детекции, VM декои, VMI, overlay, AD/Kerberos, breadcrumbs,
-доказателства+vault, compliance+export, **ransomware trap**. Всеки показва GUI и
+доказателства+vault, compliance+export, **ransomware trap**, **библиотека с образи**. Всеки показва GUI и
 CLI, където има смисъл. **Научен труд** за trap-а: `docs/research/ransomware-tarpit.md`.
 
 **Ransomware trap (hypervisor-agnostic)** — `internal/fusetrap`. DRAKVUF иска
@@ -82,6 +82,7 @@ make build
 | `internal/tokens` | honeytokens: 8 типа, callback, watcher, .docx генератор |
 | `internal/ransomware` | шест сигнала за криптор, tarpit, извличане на контакти от бележката |
 | `internal/fusetrap` | **hypervisor-agnostic ransomware trap**: FUSE bait дял → детектор + tarpit + snapshot-on-confirm; портируем мозък (тестван навсякъде) + Linux FUSE binding (go-fuse) зад build constraint |
+| `internal/catalog` | **библиотека с образи**: JSON регистър (референцира по път), difficulty tiers (easy/med/hard/insane), формат от разширението, sanitisation planner (чист) + applier през virt-customize (probe, честен ако липсва); не трие файлове, не дистрибутира HTB образи |
 | `internal/forge` | генериране на Sigma/Suricata/YARA/STIX + инцидентен доклад |
 | `internal/assure` | самотест на веригата + **Detectability Score** (fingerprint) |
 | `internal/config` | YAML манифест, валидация, `plan` диф, immutable настройки |

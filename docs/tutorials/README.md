@@ -21,6 +21,7 @@
 | 10 | [Доказателства и Vault](10-evidence-vault.md) | Tamper-evident верига + подписи + RFC 3161 timestamp |
 | 11 | [Compliance и Export](11-compliance-export.md) | NIS2/DORA доклади и threat-intel износ |
 | 12 | [Ransomware trap](12-ransomware-trap.md) | Защита от криптори на всеки хипервайзор (FUSE tarpit + snapshot) |
+| 13 | [Библиотека с образи](13-image-library.md) | Внеси ISO/OVA/qcow2, тагвай easy/med/hard/insane, санирай (махни флагове) |
 
 ## Първите пет минути
 
