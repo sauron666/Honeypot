@@ -84,6 +84,12 @@ make build
 | `internal/ransomware` | шест сигнала за криптор, tarpit, извличане на контакти от бележката |
 | `internal/fusetrap` | **hypervisor-agnostic ransomware trap**: FUSE bait дял → детектор + tarpit + snapshot-on-confirm; портируем мозък (тестван навсякъде) + Linux FUSE binding (go-fuse) зад build constraint |
 | `internal/catalog` | **библиотека с образи**: JSON регистър (референцира по път), difficulty tiers (easy/med/hard/insane), формат от разширението, sanitisation planner (чист) + applier през virt-customize (probe, честен ако липсва); не трие файлове, не дистрибутира HTB образи |
+| `internal/packs` | **Deception Packs**: подписани (ed25519), версионирани пакети с персони/декои/honeytokens/lures; вградени (healthcare-de, finance-en); валидират се срещу реалните персони |
+| `internal/saasid` | **SaaS/identity deception** (idea 11): honey Entra/Okta/Workspace идентичности + audit-log matcher; IdP push е бъдещ driver |
+| `internal/bec` | **email/BEC deception** (idea 12): honey финанс идентичности + AnalyzeEmail (кампания IOCs, spoofed-exec tell) |
+| `internal/analyst` | **LLM аналитик** (idea 18): офлайн Template + опционален локален LLM (OpenAI-съвместим); никога в alerting, всичко RequiresReview |
+| `internal/feed` | **global feed** (idea 19): Anonymize маха IP/tenant/токени, пази TTP-та; подписан ed25519, merge с дедуп |
+| `internal/wireless` | **BYOD deception** (idea 20): honey mDNS/DNS-SD устройства + recon детектор; SSID/BLE/karma искат RF хардуер (честно) |
 | `internal/forge` | генериране на Sigma/Suricata/YARA/STIX + инцидентен доклад |
 | `internal/assure` | самотест на веригата + **Detectability Score** (fingerprint) |
 | `internal/config` | YAML манифест, валидация, `plan` диф, immutable настройки |
@@ -106,7 +112,7 @@ make build
 | `internal/replay` | SSH session replay в asciinema v2 формат |
 | `internal/vault` | подписани доказателства: ed25519 seal на chain head + RFC 3161 trusted timestamp; прави веригата проверима от трета страна (съд/одитор) |
 | `internal/drivers/compute` (proxmox) | добавен `proxmox` драйвер към `inproc`/`podman`/`libvirt` |
-| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs`, `cmd/mirage-sensor` | бинарите. `miragectl` изкарва всичко: doctor/plan/apply/verify/events/forge/tokens/assure/fingerprint/vms(+smoketest)/images/presence-ca/economics + **export/compliance/insider/fleet/graph/toolkit/watermark/replay/vault**. `mirage-sensor` е in-guest колекторът (Linux netlink / Windows Sysmon → agent observer) |
+| `cmd/mirage-director`, `cmd/miragectl`, `cmd/mirage-presence`, `cmd/mirage-breadcrumbs`, `cmd/mirage-sensor` | бинарите. `miragectl` изкарва всичко: doctor/plan/apply/verify/events/forge/tokens/assure/fingerprint/vms(+smoketest)/images/**packs**/presence-ca/economics + **export/compliance/insider/fleet/graph/toolkit/watermark/replay/vault** + **saasid/bec/analyst/feed/wireless**. `mirage-sensor` е in-guest колекторът (Linux netlink / Windows Sysmon → agent observer) |
 
 ### Протоколи (`internal/honeyd/svc_*.go`)
 

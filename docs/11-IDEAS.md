@@ -72,7 +72,12 @@
 | — Fleet rotation (авто-ротация на идентичности) | ✅ готово | `internal/fleet` |
 | — STIX 2.1 export + TheHive + IOC list | ✅ готово | `internal/export` |
 | — Golden templates (Packer + cloud-init) | ✅ готово | `templates/` |
-| 11,12,18,19,20 (останалите) | ✗ бъдещи фази | — |
+| 11 SaaS/Identity deception | ✅ готово | `internal/saasid` |
+| 12 Email/BEC deception | ✅ готово | `internal/bec` |
+| 18 Локален LLM аналитик | ✅ готово | `internal/analyst` |
+| 19 Global Feed (анонимизиран, подписан) | ✅ готово | `internal/feed` |
+| 20 Wireless/BYOD | ◐ IP-discovery готово; RF иска хардуер | `internal/wireless` |
+| — Deception Packs (подписани, версионирани) | ✅ готово | `internal/packs`, `miragectl packs` |
 
 ★ = диференциатор, който конкурентите нямат.
 
@@ -128,7 +133,7 @@ spec:
 - Git като източник на истина → одит, ревю, rollback, CI на самата измама.
 - Прави продукта **преносим между среди** — един и същ манифест на Proxmox и в AWS.
 
-## ◐ 2. Персони и общностни Deception Packs — персоните реализирани в internal/honeyd/persona_*; общностният регистър предстои
+## ✅ 2. Персони и общностни Deception Packs — персоните в internal/honeyd/persona_*; **Deception Packs реализирани** в internal/packs (подписани, версионирани; miragectl packs)
 Примамката не е "Windows VM", а **персона**: роля, вертикал, държава, език,
 конвенция за имена, инсталиран софтуер, документи, потребителско поведение.
 
@@ -223,7 +228,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
 - **Honey Kubernetes**: namespace с примамен ServiceAccount, "забравен" secret в etcd,
   привилегирован под, който не бива да бъде докосван.
 
-## 11. SaaS / Identity provider deception
+## ✅ 11. SaaS / Identity provider deception — реализирано в internal/saasid (honey идентичности + audit-log matcher; IdP push е бъдещ driver)
 Пазарът се измести — атаките започват в Entra ID/Okta, не в мрежата.
 - Honey потребители в IdP-то (никога не логват → всеки опит е alert; засича
   password spraying и MFA fatigue кампании).
@@ -232,7 +237,7 @@ Presence Agent поема неизползвани IP-та в сегмента �
 - Honey Slack/Teams канал "IT-passwords".
 - Плюс: детекция чрез самите audit логове на доставчика (нула инфраструктура).
 
-## 12. Email / BEC deception
+## ✅ 12. Email / BEC deception — реализирано в internal/bec (honey финанс идентичности + AnalyzeEmail)
 - **Honey мейлбокси**, съзнателно "изтекли" в публични корпуси → засичат кампании,
   насочени към организацията, седмици преди да ударят реални хора.
 - Фалшива финансова идентичност в публичния сайт ("Иван Петров, гл. счетоводител") →
@@ -274,19 +279,19 @@ Deception е най-добрият детектор за вътрешна зап
 върнаха 3 потвърдени инцидента и 0 фалшиви положителни."*
 Позволява да се сметне ROI — нещо, което SOC инструментите почти никога не дават.
 
-## 18. Локален LLM аналитик (офлайн)
+## ✅ 18. Локален LLM аналитик (офлайн) — реализирано в internal/analyst (Template офлайн + опционален локален LLM; никога в alerting)
 Self-hosted модел, който резюмира engagement, пише черновата на инцидентния доклад,
 превежда командите на атакуващия на човешки език и предлага Sigma правило.
 Изисквания: работи офлайн (OT/air-gap), **никога не е в решаващия път за alerting**,
 всяко предложение е маркирано като "изисква преглед".
 
-## 19. Global Feed (opt-in, анонимизиран) ★ дългосрочният ров
+## ✅ 19. Global Feed (opt-in, анонимизиран) ★ дългосрочният ров — реализирано в internal/feed (анонимизиран, подписан)
 Клиентите могат доброволно да споделят анонимизирани TTP-та. Резултат: единственият
 threat feed в света, изграден от **високо-интерактивни** наблюдения — не от
 скенери и не от sandbox-ове. Колкото повече внедрявания, толкова по-добър продуктът
 за всички. Класически ефект на мрежата и защита срещу копиране.
 
-## 20. Wireless / BYOD deception
+## ◐ 20. Wireless / BYOD deception — IP-discovery частта (honey mDNS/DNS-SD + recon детектор) в internal/wireless; SSID/BLE/karma искат RF хардуер
 Honey SSID (примамка за rogue AP и за karma атаки), honey BLE устройства,
 honey принтер по mDNS, honey AirPlay/Chromecast. Ниска цена, добра демонстрация.
 

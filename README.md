@@ -212,6 +212,9 @@ baseline, но първо снимка на мръсното състояние 
 | `internal/export` | STIX 2.1 bundle, TheHive alert, дедупликиран IOC списък |
 | `internal/vault` | **ed25519 seal на chain head + RFC 3161 timestamp** — веригата е проверима от трета страна |
 | `internal/graph`, `internal/toolkit`, `internal/insider`, `internal/watermark`, `internal/fleet`, `internal/replay` | attack-path deception, attacker toolkit DB, insider-threat kit, watermarking, авто-ротация на идентичности, SSH session replay (asciinema) |
+| `internal/packs` | **Deception Packs** — подписани, версионирани пакети с измама (персони/декои/токени); дистрибуционната машина (Sigma/Atomic Red Team модел) |
+| `internal/saasid`, `internal/bec` | **identity/BEC deception** — honey Entra/Okta акаунти + audit-log matcher; honey финанс идентичности + анализ на BEC кампания |
+| `internal/analyst`, `internal/feed`, `internal/wireless` | **LLM аналитик** (офлайн/локален, извън alerting), **анонимизиран global feed** (подписан TTP feed), **BYOD deception** (honey mDNS/DNS-SD + recon детектор) |
 | `internal/api` | **REST API (39 endpoint-а) + операторска конзола (17-секционен SPA, строг CSP, textContent-only)** |
 | `cmd/mirage-presence` | Presence Agent — поема свободни адреси и тунелира към хъба |
 | `cmd/mirage-breadcrumbs` | **Breadcrumbs агент** — подхвърля следи на реален endpoint (.rdp, ~/.aws, ssh config, история), които водят право в honeynet-а; всяка следа носи honeytoken |
