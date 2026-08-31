@@ -487,6 +487,7 @@ pre,.code-block{
 }
 .decoy-card-body{padding:12px 16px;font-size:12px}
 .decoy-services{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.decoy-card-foot{margin-top:10px;padding-top:8px;border-top:1px solid var(--border);text-align:right}
 
 /* ================================================================
    STATE COLORS

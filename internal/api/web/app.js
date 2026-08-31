@@ -1115,15 +1115,17 @@ function showEventDrawer(ev) {
 // ================================================================
 
 function viewDecoys(c) {
-  return api('/api/decoys').then(function (data) {
+  return Promise.all([api('/api/decoys'), tryApi('/api/services')]).then(function (res) {
+    var data = res[0];
+    var cat = res[1] || { services: [], personas: [] };
     c.replaceChildren();
     var bound = data.bound || [];
     var personas = data.personas || {};
 
-    if (!bound.length) {
-      c.appendChild(emptyState('No decoys are listening in this deployment.'));
-      return;
-    }
+    // ---- Decoy builder (add / edit) ----
+    // The same reconcile path as the Config manifest, driven by a form: the
+    // running set, plus this decoy (replacing one with the same id).
+    c.appendChild(decoyBuilder(c, cat));
 
     // Group by decoy
     var byDecoy = new Map();
@@ -1132,8 +1134,14 @@ function viewDecoys(c) {
       byDecoy.get(l.decoy_id).push(l);
     });
 
+    if (!byDecoy.size) {
+      c.appendChild(emptyState('No decoys are listening yet. Build one above.'));
+      return;
+    }
+
     // Summary bar
     var summary = el('div', 'filters');
+    summary.style.marginTop = '16px';
     summary.appendChild(el('span', 't-sec',
       byDecoy.size + ' decoys  |  ' + bound.length + ' listeners  |  ' +
       data.projected_addresses + ' projected addresses'));
@@ -1166,11 +1174,111 @@ function viewDecoys(c) {
         svcs.appendChild(el('span', 'tag tag-accent', l.service + ' ' + l.address + '/' + l.proto));
       });
       body.appendChild(svcs);
+
+      // Retire: drops this decoy's listeners and reconciles. Emulated listeners
+      // are not evidence, so this is safe (a full-OS VM decoy is not).
+      var foot = el('div', 'decoy-card-foot');
+      var retire = el('button', 'btn-link t-err', 'retire');
+      retire.addEventListener('click', function () {
+        confirmModal('Retire decoy',
+          'Stop and remove decoy "' + decoyID + '" (' + listeners.length + ' listeners)? ' +
+          'Evidence already collected is kept.').then(function (ok) {
+          if (!ok) return;
+          api('/api/decoys/' + encodeURIComponent(decoyID), { method: 'DELETE' }).then(function () {
+            toast('Retired ' + decoyID, 'ok');
+            viewDecoys(c).catch(function (e) { toast(e.message, 'err'); });
+          }).catch(function (e) { toast(e.message, 'err'); });
+        });
+      });
+      foot.appendChild(retire);
+      body.appendChild(foot);
+
       card.appendChild(body);
       grid.appendChild(card);
     });
     c.appendChild(grid);
   });
+}
+
+// decoyBuilder is the add/edit form: an identity, optional projection
+// addresses, and one or more services. Deploying an id that already exists
+// edits it in place (the server merges by id).
+function decoyBuilder(c, cat) {
+  var panel = el('div', 'panel');
+  panel.appendChild(panelHead('Build a Decoy',
+    el('span', 't-muted', 'add or edit — deploying an existing id replaces it')));
+  var body = el('div', 'panel-body padded');
+
+  var row1 = el('div', 'form-row');
+  var idG = el('div', 'form-group grow');
+  idG.appendChild(el('label', 'form-label', 'Decoy id'));
+  var idInp = el('input', 'f-input'); idInp.placeholder = 'e.g. db-prod-2';
+  idG.appendChild(idInp); row1.appendChild(idG);
+
+  var pG = el('div', 'form-group grow');
+  pG.appendChild(el('label', 'form-label', 'Persona'));
+  var pSel = el('select', 'f-select');
+  (cat.personas || []).forEach(function (p) { pSel.appendChild(new Option(p, p)); });
+  pG.appendChild(pSel); row1.appendChild(pG);
+
+  var aG = el('div', 'form-group grow');
+  aG.appendChild(el('label', 'form-label', 'Addresses (optional, comma-separated)'));
+  var aInp = el('input', 'f-input'); aInp.placeholder = 'blank = farm default bind';
+  aG.appendChild(aInp); row1.appendChild(aG);
+  body.appendChild(row1);
+
+  // Dynamic service rows.
+  var svcWrap = el('div'); svcWrap.style.marginTop = '10px';
+  body.appendChild(el('label', 'form-label', 'Services'));
+  body.appendChild(svcWrap);
+
+  function addSvcRow(preset) {
+    var r = el('div', 'form-row'); r.style.marginTop = '6px';
+    var sSel = el('select', 'f-select');
+    (cat.services || []).forEach(function (s) { sSel.appendChild(new Option(s, s)); });
+    if (preset && preset.service) sSel.value = preset.service;
+    var portInp = el('input', 'f-input'); portInp.type = 'number'; portInp.placeholder = 'port';
+    portInp.style.maxWidth = '110px';
+    if (preset && preset.port) portInp.value = preset.port;
+    var protoSel = el('select', 'f-select'); protoSel.style.maxWidth = '110px';
+    ['auto', 'tcp', 'udp'].forEach(function (p) { protoSel.appendChild(new Option(p, p === 'auto' ? '' : p)); });
+    var rm = el('button', 'btn-link t-err', '×');
+    rm.addEventListener('click', function () { r.remove(); });
+    r.appendChild(sSel); r.appendChild(portInp); r.appendChild(protoSel); r.appendChild(rm);
+    r._read = function () {
+      return { service: sSel.value, port: parseInt(portInp.value, 10) || 0, protocol: protoSel.value };
+    };
+    svcWrap.appendChild(r);
+  }
+  addSvcRow({ service: 'ssh', port: 22 });
+
+  var ctrlRow = el('div', 'form-row'); ctrlRow.style.marginTop = '10px';
+  var addSvcBtn = el('button', 'btn btn-secondary', '+ service');
+  addSvcBtn.addEventListener('click', function () { addSvcRow(); });
+  var deployBtn = el('button', 'btn btn-primary', 'Deploy decoy');
+  deployBtn.addEventListener('click', function () {
+    var id = idInp.value.trim();
+    if (!id) { toast('A decoy id is required', 'err'); return; }
+    var services = [];
+    Array.prototype.forEach.call(svcWrap.children, function (r) {
+      if (r._read) { var s = r._read(); if (s.service && s.port) services.push(s); }
+    });
+    if (!services.length) { toast('Add at least one service with a port', 'err'); return; }
+    var addresses = aInp.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    deployBtn.disabled = true;
+    api('/api/decoys', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id, persona: pSel.value, addresses: addresses, services: services }),
+    }).then(function () {
+      toast('Deployed decoy ' + id, 'ok');
+      viewDecoys(c).catch(function (e) { toast(e.message, 'err'); });
+    }).catch(function (e) { deployBtn.disabled = false; toast(e.message, 'err'); });
+  });
+  ctrlRow.appendChild(addSvcBtn); ctrlRow.appendChild(deployBtn);
+  body.appendChild(ctrlRow);
+
+  panel.appendChild(body);
+  return panel;
 }
 
 // ================================================================
