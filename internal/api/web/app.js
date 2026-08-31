@@ -315,6 +315,73 @@ function renderView() {
   });
 }
 
+// initTableSorting watches the content area and makes EVERY table sortable —
+// including ones rebuilt dynamically (event filters, load-more, after an action)
+// — with no per-view code. One observer instead of rewriting a dozen views.
+function initTableSorting() {
+  var content = $('content');
+  if (!content || !window.MutationObserver) return;
+  var obs = new MutationObserver(function (muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var added = muts[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var n = added[j];
+        if (!n || n.nodeType !== 1) continue;
+        if (n.matches && n.matches('table.tbl')) makeSortable(n);
+        if (n.querySelectorAll) {
+          var t = n.querySelectorAll('table.tbl');
+          for (var k = 0; k < t.length; k++) makeSortable(t[k]);
+        }
+      }
+    }
+  });
+  obs.observe(content, { childList: true, subtree: true });
+}
+
+function makeSortable(table) {
+  if (!table.tHead || !table.tHead.rows.length) return;
+  var ths = table.tHead.rows[0].cells;
+  for (var i = 0; i < ths.length; i++) {
+    (function (idx, th) {
+      if (th.getAttribute('data-sortable') === '1') return;
+      th.setAttribute('data-sortable', '1');
+      th.classList.add('sortable');
+      th.addEventListener('click', function () { sortByColumn(table, idx, th); });
+    })(i, ths[i]);
+  }
+}
+
+function sortByColumn(table, idx, th) {
+  var tbody = table.tBodies[0];
+  if (!tbody) return;
+  var rows = Array.prototype.slice.call(tbody.rows);
+  var asc = th.getAttribute('data-dir') !== 'asc';
+  var ths = table.tHead.rows[0].cells;
+  for (var j = 0; j < ths.length; j++) ths[j].removeAttribute('data-dir');
+  th.setAttribute('data-dir', asc ? 'asc' : 'desc');
+  rows.sort(function (a, b) {
+    var x = cellText(a, idx), y = cellText(b, idx);
+    var nx = numericLead(x), ny = numericLead(y);
+    if (nx !== null && ny !== null) return asc ? nx - ny : ny - nx;
+    return asc ? x.localeCompare(y) : y.localeCompare(x);
+  });
+  for (var k = 0; k < rows.length; k++) tbody.appendChild(rows[k]);
+}
+
+function cellText(row, idx) {
+  var cell = row.cells[idx];
+  return cell ? cell.textContent.trim() : '';
+}
+
+// numericLead returns a leading number ("23ms"->23, "#42"->42, "1.2s"->1.2) or
+// null for text (so "critical" sorts alphabetically). Predictable, not clever.
+function numericLead(s) {
+  s = s.replace(/[,#$]/g, '').trim();
+  if (!/^-?\d/.test(s)) return null;
+  var f = parseFloat(s);
+  return isNaN(f) ? null : f;
+}
+
 // ================================================================
 // TOPBAR STATUS
 // ================================================================
@@ -2513,6 +2580,7 @@ document.addEventListener('keydown', function (e) {
 if (storedToken()) setToken(storedToken());
 
 buildNav();
+initTableSorting();
 loadStatus();
 renderView();
 scheduleRefresh();

@@ -245,6 +245,14 @@ body.sb-collapsed .app-shell{margin-left:var(--sidebar-cw)}
   color:var(--text-muted);white-space:nowrap;
   position:sticky;top:0;background:var(--bg-card);z-index:1;
 }
+.tbl th.sortable{cursor:pointer;user-select:none}
+.tbl th.sortable:hover{color:var(--text)}
+.tbl th[data-dir=asc]::after{content:' \25B2';color:var(--accent)}
+.tbl th[data-dir=desc]::after{content:' \25BC';color:var(--accent)}
+.tbl tr.detail-row td{background:var(--bg);border-bottom:2px solid var(--border)}
+.tbl tr.detail-row pre{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--text-sec)}
+tr.clickable{cursor:pointer}
+tr.clickable:hover td{background:var(--bg-hover)}
 .tbl td{
   padding:8px 12px;border-bottom:1px solid var(--border-subtle);
   font-size:12px;vertical-align:middle;
