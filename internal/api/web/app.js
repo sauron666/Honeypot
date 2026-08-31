@@ -27,6 +27,10 @@ var NAV = [
   { id: 'trap',        icon: '⊗', label: 'Ransomware Trap' },
   { id: 'topology',    icon: '⌘', label: 'Topology' },
   { id: 'presence',    icon: '⊕', label: 'Presence' },
+  { id: 'packs',       icon: '❏', label: 'Deception Packs' },
+  { id: 'identity',    icon: '⚿', label: 'Identity / BEC' },
+  { id: 'wireless',    icon: '☊', label: 'BYOD / Wireless' },
+  { id: 'feed',        icon: '⇄', label: 'Global Feed' },
   { id: 'config',      icon: '⊡', label: 'Configuration' },
   { id: 'about',       icon: '⊙', label: 'About / Status' },
 ];
@@ -301,6 +305,10 @@ var VIEWS = {
   trap:        viewTrap,
   topology:    viewTopology,
   presence:    viewPresence,
+  packs:       viewPacks,
+  identity:    viewIdentity,
+  wireless:    viewWireless,
+  feed:        viewFeed,
   config:      viewConfig,
   about:       viewAbout,
 };
@@ -872,6 +880,26 @@ function showEngagementDrawer(eng) {
         window.open('/api/engagements/' + encodeURIComponent(eng.id) + '/forge?format=report', '_blank', 'noopener');
       });
       actions.appendChild(reportBtn);
+
+      // Offline analyst narrative (template — deterministic, requires review).
+      var aiBtn = el('button', 'btn btn-secondary', 'Analyst Narrative');
+      aiBtn.addEventListener('click', function () {
+        aiBtn.disabled = true; aiBtn.textContent = 'Analysing…';
+        api('/api/analyst/' + encodeURIComponent(eng.id)).then(function (n) {
+          aiBtn.disabled = false; aiBtn.textContent = 'Analyst Narrative';
+          var box = document.getElementById('analyst-box') || el('div');
+          box.id = 'analyst-box'; box.replaceChildren();
+          box.style.marginTop = '12px';
+          box.appendChild(el('div', 't-muted', 'source: ' + (n.Source || 'template') +
+            (n.RequiresReview ? ' — requires human review' : '')));
+          box.appendChild(el('pre', 'config-block', n.ReportDraft || n.Summary || ''));
+          body.appendChild(box);
+        }).catch(function (e) {
+          aiBtn.disabled = false; aiBtn.textContent = 'Analyst Narrative';
+          toast(e.message, 'err');
+        });
+      });
+      actions.appendChild(aiBtn);
       body.appendChild(actions);
     }).catch(function (err) {
       body.replaceChildren(el('div', 'empty-state', 'Failed to load: ' + err.message));
@@ -2570,6 +2598,218 @@ function viewAbout(c) {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') closeDrawer();
 });
+
+// ================================================================
+// VIEW: DECEPTION PACKS
+// ================================================================
+
+function viewPacks(c) {
+  return api('/api/packs').then(function (data) {
+    c.replaceChildren();
+    var panel = el('div', 'panel');
+    panel.appendChild(panelHead('Deception Packs',
+      el('span', 'tag tag-accent', (data.packs || []).length + ' packs')));
+    var body = el('div', 'panel-body');
+    body.appendChild(el('div', 't-sec padded',
+      'Signed, versioned bundles of deception content (personas, decoys, honeytokens). ' +
+      'Apply from the CLI: miragectl packs apply <name>.'));
+    var tbl = el('table', 'tbl');
+    var thead = el('thead'); var hr = el('tr');
+    ['Name', 'Version', 'Vertical', 'Locale', 'Decoys', 'Tokens', 'Valid'].forEach(function (h) {
+      hr.appendChild(el('th', null, h));
+    });
+    thead.appendChild(hr); tbl.appendChild(thead);
+    var tbody = el('tbody');
+    (data.packs || []).forEach(function (p) {
+      var tr = el('tr', 'clickable');
+      tr.appendChild(el('td', null, p.Name));
+      tr.appendChild(el('td', 'narrow', p.Version));
+      tr.appendChild(el('td', null, p.Vertical || '-'));
+      tr.appendChild(el('td', 'narrow', p.Locale || '-'));
+      tr.appendChild(el('td', 'narrow', String(p.Decoys)));
+      tr.appendChild(el('td', 'narrow', String(p.Tokens)));
+      var vTd = el('td', 'narrow');
+      vTd.appendChild(el('span', p.Valid ? 't-ok' : 't-err', p.Valid ? 'valid' : 'invalid'));
+      tr.appendChild(vTd);
+      tr.addEventListener('click', function () { showPackDetail(p.Name); });
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody); body.appendChild(tbl);
+    panel.appendChild(body); c.appendChild(panel);
+    var host = el('div'); host.id = 'pack-detail-host'; host.style.marginTop = '16px';
+    c.appendChild(host);
+  });
+}
+
+function showPackDetail(name) {
+  var host = document.getElementById('pack-detail-host');
+  if (!host) return;
+  host.replaceChildren(loading());
+  tryApi('/api/packs/' + encodeURIComponent(name)).then(function (data) {
+    host.replaceChildren();
+    if (!data) { host.appendChild(emptyState('Could not load the pack.')); return; }
+    var p = data.pack || {};
+    var panel = el('div', 'panel');
+    panel.appendChild(panelHead('Pack: ' + name,
+      el('button', 'btn btn-sm btn-secondary', 'Copy apply command')));
+    panel.querySelector('button').addEventListener('click', function () {
+      copyText('miragectl packs apply ' + name);
+    });
+    var body = el('div', 'panel-body padded');
+    if (p.description) body.appendChild(el('div', 't-sec', p.description));
+    (p.decoys || []).forEach(function (d) {
+      var svc = (d.services || []).map(function (s) { return s.service + ':' + s.port; }).join(' ');
+      body.appendChild(el('div', null, '• ' + d.id + '  (' + d.persona + ')  ' + svc));
+    });
+    if ((p.honeytokens || []).length) {
+      body.appendChild(el('div', 't-muted', 'honeytokens: ' +
+        p.honeytokens.map(function (t) { return t.type + '/' + t.label; }).join(', ')));
+    }
+    panel.appendChild(body); host.appendChild(panel);
+  });
+}
+
+// ================================================================
+// VIEW: IDENTITY / BEC
+// ================================================================
+
+function viewIdentity(c) {
+  c.replaceChildren();
+
+  // --- SaaS / identity generator ---
+  var sp = el('div', 'panel');
+  sp.appendChild(panelHead('SaaS / Identity Deception (honey accounts)'));
+  var sb = el('div', 'panel-body padded');
+  var row = el('div', 'form-row');
+  var prov = el('select', 'f-select');
+  ['entra', 'okta', 'workspace'].forEach(function (p) { prov.appendChild(new Option(p, p)); });
+  var dom = el('input', 'f-input'); dom.placeholder = 'domain (e.g. corp.com)'; dom.value = 'corp.local';
+  var genBtn = el('button', 'btn btn-primary', 'Generate');
+  row.appendChild(prov); row.appendChild(dom); row.appendChild(genBtn);
+  sb.appendChild(row);
+  var sOut = el('div'); sOut.style.marginTop = '12px'; sb.appendChild(sOut);
+  genBtn.addEventListener('click', function () {
+    sOut.replaceChildren(loading());
+    api('/api/saasid?provider=' + prov.value + '&domain=' + encodeURIComponent(dom.value)).then(function (d) {
+      sOut.replaceChildren();
+      var k = d.kit || {};
+      var tbl = el('table', 'tbl'); var th = el('thead'); var hr = el('tr');
+      ['UPN', 'Role', 'Note'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+      th.appendChild(hr); tbl.appendChild(th);
+      var tb = el('tbody');
+      (k.accounts || []).forEach(function (a) {
+        var tr = el('tr');
+        tr.appendChild(el('td', null, a.upn));
+        tr.appendChild(el('td', 'narrow', a.role));
+        tr.appendChild(el('td', null, a.note));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb); sOut.appendChild(tbl);
+      sOut.appendChild(el('div', 't-muted', 'watch in the IdP audit log: ' + (d.watch || []).join(', ')));
+    }).catch(function (e) { toast(e.message, 'err'); });
+  });
+  sp.appendChild(sb); c.appendChild(sp);
+
+  // --- BEC email analysis ---
+  var bp = el('div', 'panel'); bp.style.marginTop = '16px';
+  bp.appendChild(panelHead('Email / BEC — analyse a received message'));
+  var bb = el('div', 'panel-body padded');
+  bb.appendChild(el('div', 't-sec', 'Paste a raw email (headers + body) to extract the campaign infrastructure and the BEC tell.'));
+  var ta = el('textarea', 'f-input');
+  ta.style.width = '100%'; ta.style.minHeight = '140px'; ta.style.marginTop = '10px';
+  ta.style.fontFamily = 'var(--mono)'; ta.style.fontSize = '12px';
+  ta.placeholder = 'From: ...\\nReply-To: ...\\nSubject: ...\\n\\nbody';
+  bb.appendChild(ta);
+  var anBtn = el('button', 'btn btn-primary', 'Analyse'); anBtn.style.marginTop = '10px';
+  bb.appendChild(anBtn);
+  var bOut = el('div'); bOut.style.marginTop = '12px'; bb.appendChild(bOut);
+  anBtn.addEventListener('click', function () {
+    bOut.replaceChildren(loading());
+    api('/api/bec/analyze', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ta.value })
+      .then(function (cmp) {
+        bOut.replaceChildren();
+        var t = el('table', 'kv');
+        kvRow(t, 'from', (cmp.from_name || '') + ' <' + (cmp.from_address || '') + '>');
+        kvRow(t, 'reply-to', cmp.reply_to || '-');
+        kvRow(t, 'sender IPs', (cmp.sender_ips || []).join(', '));
+        kvRow(t, 'URLs', (cmp.urls || []).join(', '));
+        bOut.appendChild(t);
+        bOut.appendChild(el('div', cmp.is_bec ? 't-err' : 't-ok',
+          cmp.is_bec ? 'VERDICT: likely BEC (spoofed sender / external reply)' : 'no BEC tell detected'));
+      }).catch(function (e) { toast(e.message, 'err'); });
+  });
+  bp.appendChild(bb); c.appendChild(bp);
+  return Promise.resolve();
+}
+
+// ================================================================
+// VIEW: BYOD / WIRELESS
+// ================================================================
+
+function viewWireless(c) {
+  return api('/api/wireless').then(function (data) {
+    c.replaceChildren();
+    var panel = el('div', 'panel');
+    panel.appendChild(panelHead('BYOD / Wireless — honey network devices'));
+    var body = el('div', 'panel-body');
+    var tbl = el('table', 'tbl'); var th = el('thead'); var hr = el('tr');
+    ['Instance', 'Service Type', 'Host', 'Port', 'Kind'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    th.appendChild(hr); tbl.appendChild(th);
+    var tb = el('tbody');
+    (data.devices || []).forEach(function (d) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, d.instance));
+      tr.appendChild(el('td', 'narrow', d.service_type));
+      tr.appendChild(el('td', null, d.host));
+      tr.appendChild(el('td', 'narrow', String(d.port)));
+      tr.appendChild(el('td', 'narrow', d.kind));
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb); body.appendChild(tbl);
+    var note = el('div', 't-muted padded');
+    note.textContent = 'Watch a query for: ' + (data.browse || []).join(', ');
+    body.appendChild(note);
+    body.appendChild(el('div', 't-sec padded', data.note || ''));
+    panel.appendChild(body); c.appendChild(panel);
+  });
+}
+
+// ================================================================
+// VIEW: GLOBAL FEED (anonymized preview)
+// ================================================================
+
+function viewFeed(c) {
+  return api('/api/feed').then(function (data) {
+    c.replaceChildren();
+    var panel = el('div', 'panel');
+    panel.appendChild(panelHead('Global Feed — anonymized preview',
+      el('span', 'tag tag-accent', (data.entries || []).length + ' entries')));
+    var body = el('div', 'panel-body');
+    body.appendChild(el('div', 't-sec padded', data.note || ''));
+    var entries = data.entries || [];
+    if (!entries.length) {
+      body.appendChild(emptyState('No engagements yet — nothing to share.'));
+    } else {
+      var tbl = el('table', 'tbl'); var th = el('thead'); var hr = el('tr');
+      ['Techniques', 'Services', 'Payload domains', 'Severity', 'Source hash'].forEach(function (h) {
+        hr.appendChild(el('th', null, h));
+      });
+      th.appendChild(hr); tbl.appendChild(th);
+      var tb = el('tbody');
+      entries.forEach(function (e) {
+        var tr = el('tr');
+        tr.appendChild(el('td', null, (e.techniques || []).join(', ')));
+        tr.appendChild(el('td', null, (e.services || []).join(', ')));
+        tr.appendChild(el('td', null, (e.payload_domains || []).join(', ') || '-'));
+        tr.appendChild(el('td', 'narrow', e.severity || '-'));
+        tr.appendChild(el('td', 'narrow', e.source_hash || '-'));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb); body.appendChild(tbl);
+    }
+    panel.appendChild(body); c.appendChild(panel);
+  });
+}
 
 // ================================================================
 // INIT
