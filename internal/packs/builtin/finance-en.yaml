@@ -1,0 +1,34 @@
+name: finance-en
+version: 1.0.0
+vertical: finance
+locale: en-US
+author: MIRAGE
+description: >
+  Finance-sector deception: a database host holding "trading positions", a
+  domain controller, and a web app. Bait documents in English; service accounts
+  are kerberoastable, so an attacker who owns the domain reaches for them.
+decoys:
+  - id: dcy-fin-db01
+    persona: linux/db
+    services:
+      - {service: mysql, port: 3306}
+      - {service: mssql, port: 1433}
+      - {service: ssh, port: 22}
+  - id: dcy-fin-dc01
+    persona: windows/dc
+    services:
+      - {service: ldap, port: 389}
+      - {service: kerberos, port: 88}
+      - {service: smb, port: 445}
+  - id: dcy-fin-web01
+    persona: linux/web
+    services:
+      - {service: http, port: 80}
+      - {service: ssh, port: 22}
+honeytokens:
+  - {type: office-doc, label: "Trading_Positions_2026_LIVE.xlsx", location: "\\\\fs01\\Finance"}
+  - {type: aws-key, label: "reporting-pipeline-key", location: "\\\\fs01\\Finance\\.aws\\credentials"}
+  - {type: db-connection, label: "positions-db", location: "\\\\fs01\\Finance\\app.config"}
+lures:
+  - {kind: aws-creds, target: "~/.aws/credentials", note: "on a finance analyst laptop"}
+  - {kind: ssh-config, target: "~/.ssh/config", note: "entry for fin-db01"}

@@ -71,6 +71,7 @@ commands:
   vault       sign the evidence chain head (+ optional RFC 3161 timestamp), and verify a seal
   vms         list full-OS decoys, and burn or reset one during an incident
   images      image library: import/list/retag/remove and sanitise decoy images
+  packs       Deception Packs: list/show/apply/sign/verify bundled deception content
   status      query a running director over its API
   version     print the version
 
@@ -137,6 +138,8 @@ func main() {
 		err = vmsCmd(args)
 	case "images":
 		err = imagesCmd(args)
+	case "packs":
+		err = packsCmd(args)
 	case "status":
 		err = status(args)
 	case "version":

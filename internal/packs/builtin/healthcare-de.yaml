@@ -1,0 +1,26 @@
+name: healthcare-de
+version: 1.0.0
+vertical: healthcare
+locale: de-DE
+author: MIRAGE
+description: >
+  Klinik-Deception: ein Dateiserver mit Patientenakten, ein Backup-Repository
+  und ein medizinischer Arbeitsplatz. Baitdokumente auf Deutsch; jede Berührung
+  ist ein Signal.
+decoys:
+  - id: dcy-klinik-fs01
+    persona: linux/fileserver
+    services:
+      - {service: smb, port: 445}
+      - {service: ssh, port: 22}
+  - id: dcy-klinik-bak01
+    persona: linux/backup
+    services:
+      - {service: ftp, port: 21}
+      - {service: ssh, port: 22}
+honeytokens:
+  - {type: office-doc, label: "Patientenakte_Muster.docx", location: "\\\\fs01\\Patientenakten"}
+  - {type: credential, label: "PACS-Admin", location: "\\\\fs01\\IT\\zugangsdaten.txt"}
+  - {type: db-connection, label: "KIS-Datenbank", location: "\\\\fs01\\IT\\kis.conf"}
+lures:
+  - {kind: rdp, target: "klinik-fs01.klinik.local", note: "auf dem Arbeitsplatz des IT-Admins platzieren"}
