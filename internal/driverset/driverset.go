@@ -37,6 +37,7 @@ func Default() *drivers.Registry {
 	// none is the honest choice for a deployment with no hypervisor.
 	r.Register(observer.NoneInfo(), observer.NewNone)
 	r.Register(observer.DrakvufInfo(), observer.NewDrakvuf)
+	r.Register(observer.AgentInfo(), observer.NewAgent)
 
 	// NAC: steering unknown devices into the honeynet. Two implementations so
 	// the category is a real abstraction (ADR-008): freeradius steers via
