@@ -1,6 +1,7 @@
 package event
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -71,11 +72,47 @@ func hashEvent(e *Event) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	body = normalizeUTF8(body)
 
 	sum := sha256.New()
 	sum.Write([]byte(e.Mirage.Chain.PrevHash))
 	sum.Write(body)
 	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// invalidUTF8Marker is what encoding/json writes into its output for a byte
+// that is not valid UTF-8: the six ASCII bytes \ufffd (a backslash, a u, and
+// four hex digits -- not the U+FFFD rune itself).
+var invalidUTF8Marker = []byte("\\ufffd")
+
+// normalizeUTF8 makes the hash input stable across a storage round-trip.
+//
+// The problem it solves: encoding/json turns an invalid UTF-8 byte into the
+// escape \ufffd on the way out, but decoding that escape yields a real U+FFFD
+// rune whose bytes (EF BF BD) re-encode to something different. So an event
+// hashed in memory and the same event hashed after being written and re-read
+// would produce different hashes -- and the chain would flag honest evidence as
+// TAMPERED. An attacker who can get invalid UTF-8 into any recorded field (an
+// LDAP bind, a raw payload) could trigger it at will: an anti-forensics vector.
+//
+// The fix is to hash the STABLE, post-decode form. When the encoder emitted the
+// marker, decode and re-encode once so the bytes match what a reload produces.
+// Events without invalid UTF-8 (the overwhelming majority) never contain the
+// marker and pay nothing, and their hashes are unchanged -- existing clean
+// evidence still verifies.
+func normalizeUTF8(body []byte) []byte {
+	if !bytes.Contains(body, invalidUTF8Marker) {
+		return body
+	}
+	e, err := Decode(body)
+	if err != nil {
+		return body
+	}
+	stable, err := CanonicalJSON(e)
+	if err != nil {
+		return body
+	}
+	return stable
 }
 
 // VerifyError describes exactly where a chain broke, so an analyst can point at

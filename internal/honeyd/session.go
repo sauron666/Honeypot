@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/version"
@@ -180,20 +181,46 @@ func (s *Session) Record(direction string, b []byte) {
 // sanitize renders control characters readably so a transcript can be shown in
 // a browser without turning into terminal escape soup, and so an attacker
 // cannot inject escape sequences into an analyst's terminal.
+//
+// It is rune-aware for a second, non-cosmetic reason: an attacker who sends
+// invalid UTF-8 (an LDAP bind with a 0x80 byte, a binary payload) must not be
+// able to poison the evidence. A raw invalid byte left in a string is re-coded
+// by encoding/json as U+FFFD on the way out and decoded back differently on
+// reload, which changes the bytes the hash chain covers and makes honest
+// evidence read as TAMPERED -- an anti-forensics vector. Escaping every invalid
+// byte as \xNN keeps the transcript valid UTF-8 and, crucially, preserves the
+// exact byte the attacker sent (the � you would otherwise see loses it).
 func sanitize(b []byte) []byte {
 	out := make([]byte, 0, len(b))
-	for _, c := range b {
+	for i := 0; i < len(b); {
+		c := b[i]
 		switch {
 		case c == '\n':
 			out = append(out, '\\', 'n')
+			i++
 		case c == '\r':
 			out = append(out, '\\', 'r')
+			i++
 		case c == '\t':
 			out = append(out, '\\', 't')
+			i++
 		case c < 0x20 || c == 0x7f:
-			out = append(out, []byte(fmt.Sprintf("\\x%02x", c))...)
-		default:
+			out = append(out, fmt.Sprintf("\\x%02x", c)...)
+			i++
+		case c < 0x80:
 			out = append(out, c)
+			i++
+		default:
+			// A multi-byte rune: pass it through only if it is valid UTF-8;
+			// otherwise escape the single offending byte and advance one.
+			r, size := utf8.DecodeRune(b[i:])
+			if r == utf8.RuneError && size <= 1 {
+				out = append(out, fmt.Sprintf("\\x%02x", c)...)
+				i++
+			} else {
+				out = append(out, b[i:i+size]...)
+				i += size
+			}
 		}
 	}
 	return out

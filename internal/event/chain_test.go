@@ -177,3 +177,38 @@ func asVerifyError(err error, target **VerifyError) bool {
 	}
 	return ok
 }
+
+// TestChainSurvivesInvalidUTF8 reproduces the anti-forensics bug a live pentest
+// found: an attacker who sends invalid UTF-8 (an LDAP bind with a 0x80 byte, a
+// binary payload) to a service that records a transcript could make the whole
+// evidence chain read as TAMPERED after a store round-trip. The invalid byte was
+// encoded as the escape � at seal but decoded back as a real U+FFFD on
+// reload, changing the hashed bytes. The chain must now survive it.
+func TestChainSurvivesInvalidUTF8(t *testing.T) {
+	c := NewChain()
+	e := sample("ldap bind")
+	// Put raw invalid UTF-8 into a recorded field, as an attacker would.
+	e.Set("transcript", ">> \x80\x81\xfe bind\n")
+	e.Set("raw_username", "admin\xff")
+	if err := c.Seal(e); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	// Simulate the storage round-trip: canonical-encode, then decode, exactly as
+	// the store writes to disk and reloads on restart.
+	raw, err := CanonicalJSON(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify([]*Event{back}, GenesisHash); err != nil {
+		t.Fatalf("invalid UTF-8 in a field must NOT break the chain: %v", err)
+	}
+	// And a genuine tamper on such an event is still caught.
+	back.Set("transcript", "tampered")
+	if err := Verify([]*Event{back}, GenesisHash); err == nil {
+		t.Fatal("a real change to an invalid-UTF-8 event must still be detected")
+	}
+}
