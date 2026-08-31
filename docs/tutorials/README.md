@@ -20,6 +20,7 @@
 | 09 | [Breadcrumbs](09-breadcrumbs.md) | Подхвърли следи на реални машини, водещи в honeynet-а |
 | 10 | [Доказателства и Vault](10-evidence-vault.md) | Tamper-evident верига + подписи + RFC 3161 timestamp |
 | 11 | [Compliance и Export](11-compliance-export.md) | NIS2/DORA доклади и threat-intel износ |
+| 12 | [Ransomware trap](12-ransomware-trap.md) | Защита от криптори на всеки хипервайзор (FUSE tarpit + snapshot) |
 
 ## Първите пет минути
 

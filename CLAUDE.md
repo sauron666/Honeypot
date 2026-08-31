@@ -42,10 +42,18 @@ vs path); topology секцията рисува цялата естейт ка�
 34 REST endpoint-а (10 нови: compliance, graph, topology, VM start/stop, system,
 fingerprint, observer status, observer dump).
 
-**Туториали** — `docs/tutorials/` (11 броя, български): quickstart, конзола,
+**Туториали** — `docs/tutorials/` (12 броя, български): quickstart, конзола,
 honeytokens, детекции, VM декои, VMI, overlay, AD/Kerberos, breadcrumbs,
-доказателства+vault, compliance+export. Всеки показва GUI и CLI, където има
-смисъл.
+доказателства+vault, compliance+export, **ransomware trap**. Всеки показва GUI и
+CLI, където има смисъл. **Научен труд** за trap-а: `docs/research/ransomware-tarpit.md`.
+
+**Ransomware trap (hypervisor-agnostic)** — `internal/fusetrap`. DRAKVUF иска
+Xen+VMFUNC; повечето клиенти карат KVM/VMware/Hyper-V. Trap-ът затваря дупката за
+най-важната заплаха без VMI: FUSE bait дял, всяка операция минава през детектора
+и tarpit-а преди диска. Потвърждение за 2-3 операции, snapshot на декоя, critical
+T1486 в веригата. Config секция `trap:`, GUI секция „Ransomware Trap",
+`GET /api/trap`. Портируемият мозък е тестван на всяка платформа; FUSE монтажът
+е Linux-only (best-effort — mount провал не спира director-а).
 
 **Платформи:** компилира се и минава тестове на Linux и Windows. На Windows
 Unix file permissions не се проверяват (не съществуват); тестовете го пропускат
@@ -73,6 +81,7 @@ make build
 | `internal/alert` | праг по severity, дедупликация, линк към engagement, synthetic маркер |
 | `internal/tokens` | honeytokens: 8 типа, callback, watcher, .docx генератор |
 | `internal/ransomware` | шест сигнала за криптор, tarpit, извличане на контакти от бележката |
+| `internal/fusetrap` | **hypervisor-agnostic ransomware trap**: FUSE bait дял → детектор + tarpit + snapshot-on-confirm; портируем мозък (тестван навсякъде) + Linux FUSE binding (go-fuse) зад build constraint |
 | `internal/forge` | генериране на Sigma/Suricata/YARA/STIX + инцидентен доклад |
 | `internal/assure` | самотест на веригата + **Detectability Score** (fingerprint) |
 | `internal/config` | YAML манифест, валидация, `plan` диф, immutable настройки |
@@ -248,6 +257,21 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
 - **libvmi config ключ е `volatility_ist`, не `json_path`.** flex/bison
   парсерът в libvmi не разпознава `json_path` — получаваш "unknown config
   key" без ясно съобщение. ISF профил от dwarf2json се подава с `volatility_ist`.
+- **Ransomware trap монтажът е best-effort.** `startTrap` логва warning и
+  продължава при провал (не Linux, няма `/dev/fuse`, зает mountpoint) — director,
+  който отказва да тръгне заради зает mountpoint, е по-лош от такъв без trap.
+  Детекторът работи и през емулираните FTP/SMB услуги независимо.
+- **Trap callback-ите се fire-ват без trap lock-а.** FUSE handler-ът е нишката
+  на атакуващия; писане в evidence store-а под lock-а би заключило файловата
+  система. `observeLocked` освобождава lock-а преди OnEvent/OnConfirmed.
+- **`fs_linux.go` е нарочно Linux-only** (FUSE ядрена връзка, go-fuse). В
+  allow-list-а на `build_constraints_test.go` е, с обосновка. Портируемият мозък
+  (`trap.go`) компилира и се тества навсякъде; `fs_other.go` е стъб.
+- **ConfirmScore=70, а ентропия+extension+velocity=65 нарочно.** Криптиране на
+  чисто нови файлове (без разрушаване на познат тип и без canary) не стига за
+  потвърждение само по себе си — иначе потребител, който твори нови файлове,
+  би вдигнал аларма. Magic-loss или canary touch (+25) прехвърля прага. Това е
+  съзнателен FP компромис, не бъг.
 - **vm_event lock при DRAKVUF crash/timeout.** Ако DRAKVUF не се изключи
   чисто (timeout, kill), vm_event остава заключен — следващото стартиране
   гърми с "Device or resource busy". Единственият fix е `xl destroy` + `xl
