@@ -26,7 +26,13 @@ func TestNoAccidentalPlatformConstraints(t *testing.T) {
 		"loong64": true, "wasm": true,
 	}
 	// Files that genuinely want the constraint belong here, with a reason.
-	allowed := map[string]string{}
+	allowed := map[string]string{
+		// The FUSE mount binds to the Linux kernel (go-fuse); the portable trap
+		// brain in trap.go compiles everywhere, and fs_other.go stubs the mount
+		// off Linux. This file is meant to be linux-only and carries an explicit
+		// //go:build linux as well.
+		"internal/fusetrap/fs_linux.go": "FUSE kernel binding is Linux-only by design",
+	}
 
 	root, err := filepath.Abs("../..")
 	if err != nil {

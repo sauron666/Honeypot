@@ -47,6 +47,26 @@ type Config struct {
 	Tokens     TokenConfig        `yaml:"tokens"`
 	Presence   presence.HubConfig `yaml:"presence"`
 	VMs        VMFarmConfig       `yaml:"vms"`
+	Trap       TrapConfig         `yaml:"trap"`
+}
+
+// TrapConfig configures the hypervisor-agnostic ransomware trap: a FUSE-backed
+// decoy file share whose every operation flows through the ransomware detector
+// and tarpit. Unlike DRAKVUF it needs no Xen and no VMFUNC CPU, so ransomware
+// protection holds on KVM/Proxmox, VMware and Hyper-V alike.
+type TrapConfig struct {
+	// Enabled turns the trap on. It mounts only on Linux (needs /dev/fuse); on
+	// other hosts the director logs that the trap is unavailable and continues.
+	Enabled bool `yaml:"enabled"`
+	// Mountpoint is where the share is mounted. A decoy (or a real endpoint via
+	// SMB/NFS re-export) mounts this to become bait.
+	Mountpoint string `yaml:"mountpoint"`
+	// ShareID names the share in events (e.g. "fileserver-finance").
+	ShareID string `yaml:"share_id"`
+	// SnapshotDecoy, when set, is the full-OS decoy the trap snapshots the
+	// moment ransomware is confirmed, preserving the crime scene on the
+	// hypervisor. Optional; leave empty on deployments with no VM farm.
+	SnapshotDecoy string `yaml:"snapshot_decoy"`
 }
 
 // VMFarmConfig declares full-OS decoys: real machines, not emulations.

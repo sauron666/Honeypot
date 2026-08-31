@@ -26,6 +26,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/engagement"
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/farm"
+	"github.com/sauron666/Honeypot/internal/fusetrap"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/presence"
 	"github.com/sauron666/Honeypot/internal/store"
@@ -50,6 +51,14 @@ type App struct {
 	// Observer watches inside full-OS decoys from the hypervisor, when
 	// configured. Sightings are fed through ingest like any other event.
 	Observer drivers.ObserverDriver
+
+	// Trap is the hypervisor-agnostic ransomware trap, when configured. It is
+	// a FUSE share whose operations feed the ransomware detector and tarpit.
+	Trap *fusetrap.Trap
+
+	// compute is retained so the trap can snapshot a decoy on confirmation.
+	compute   drivers.ComputeDriver
+	trapMount *fusetrap.Mounted
 
 	log        *slog.Logger
 	started    time.Time
@@ -186,6 +195,10 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		}
 	}
 
+	if cfg.Trap.Enabled {
+		a.buildTrap(cfg, log)
+	}
+
 	a.API, err = api.New(cfg.API.Listen, api.Deps{
 		Store: evStore, Tracker: a.Tracker, Farm: a.Farm, Registry: a.Registry,
 		Dispatcher: a.Dispatcher, Tokens: a.Tokens, RunningConfig: cfg,
@@ -193,6 +206,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		Presence: a.Presence,
 		VMs:      a.VMs,
 		Observer: a.Observer,
+		Trap:     a.Trap,
 		Tenant:   cfg.Tenant, Site: cfg.Site,
 		StartedAt: a.started, Log: log, Token: cfg.API.Token,
 	})
@@ -240,6 +254,7 @@ func (a *App) buildVMFarm(cfg *config.Config, log *slog.Logger) error {
 		}
 	}
 
+	a.compute = compute
 	a.VMs, err = farm.New(farm.Options{
 		Compute: compute, ComputeInfo: computeInfo, Fabric: fab,
 		ContainmentUnenforced: cfg.VMs.Containment == "unenforced",
@@ -463,6 +478,9 @@ func (a *App) Start(ctx context.Context) error {
 		}
 		return err
 	}
+	// The trap is best-effort: a mount failure (no /dev/fuse, not Linux, busy
+	// mountpoint) must never stop the director. It logs and continues.
+	a.startTrap()
 	go a.sweepLoop(ctx)
 	return nil
 }
@@ -500,6 +518,7 @@ func (a *App) sweepLoop(ctx context.Context) {
 func (a *App) Stop(ctx context.Context) error {
 	close(a.sweepCh)
 	a.stopAllObservers()
+	a.stopTrap()
 	if err := a.API.Shutdown(ctx); err != nil {
 		a.log.Warn("api shutdown", "err", err)
 	}

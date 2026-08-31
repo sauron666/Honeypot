@@ -33,6 +33,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/event"
 	"github.com/sauron666/Honeypot/internal/farm"
 	"github.com/sauron666/Honeypot/internal/forge"
+	"github.com/sauron666/Honeypot/internal/fusetrap"
 	"github.com/sauron666/Honeypot/internal/graph"
 	"github.com/sauron666/Honeypot/internal/honeyd"
 	"github.com/sauron666/Honeypot/internal/presence"
@@ -63,7 +64,9 @@ type Deps struct {
 	// VMs provisions full-OS decoys, when the deployment declares any.
 	VMs *farm.Provisioner
 	// Observer watches inside full-OS decoys from the hypervisor.
-	Observer  drivers.ObserverDriver
+	Observer drivers.ObserverDriver
+	// Trap is the hypervisor-agnostic ransomware trap, when configured.
+	Trap      *fusetrap.Trap
 	Tenant    string
 	Site      string
 	StartedAt time.Time
@@ -136,6 +139,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/system", s.systemInfo)
 	s.mux.HandleFunc("GET /api/observer", s.observerStatus)
 	s.mux.HandleFunc("POST /api/observer/{id}/dump", s.observerDump)
+	s.mux.HandleFunc("GET /api/trap", s.trapStatus)
 
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -1157,6 +1161,27 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"evidence":   st,
 		"num_cpus":   runtime.NumCPU(),
 		"goroutines": runtime.NumGoroutine(),
+	})
+}
+
+// trapStatus reports the ransomware trap: whether it is armed, its live
+// verdict, and the impact metrics that make the defence measurable.
+func (s *Server) trapStatus(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Trap == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled": false,
+			"message": "no ransomware trap configured; the ransomware detector still runs " +
+				"inside the emulated FTP/SMB services",
+		})
+		return
+	}
+	v := s.deps.Trap.Verdict()
+	m := s.deps.Trap.Metrics()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": true,
+		"verdict": v,
+		"metrics": m,
+		"listing": s.deps.Trap.List("/"),
 	})
 }
 

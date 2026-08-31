@@ -23,6 +23,7 @@ var NAV = [
   { id: 'evidence',    icon: '●', label: 'Evidence Chain' },
   { id: 'compliance',  icon: '✓', label: 'Compliance' },
   { id: 'observer',    icon: '◈', label: 'Observer / VMI' },
+  { id: 'trap',        icon: '⊗', label: 'Ransomware Trap' },
   { id: 'topology',    icon: '⌘', label: 'Topology' },
   { id: 'presence',    icon: '⊕', label: 'Presence' },
   { id: 'config',      icon: '⊡', label: 'Configuration' },
@@ -223,6 +224,7 @@ var VIEWS = {
   evidence:    viewEvidence,
   compliance:  viewCompliance,
   observer:    viewObserver,
+  trap:        viewTrap,
   topology:    viewTopology,
   presence:    viewPresence,
   config:      viewConfig,
@@ -1673,6 +1675,107 @@ function viewObserver(c) {
     form.appendChild(dumpBtn);
     c.appendChild(form);
   });
+}
+
+// VIEW: RANSOMWARE TRAP
+// ================================================================
+
+function viewTrap(c) {
+  return tryApi('/api/trap').then(function (data) {
+    c.replaceChildren();
+
+    if (!data || !data.enabled) {
+      var panel0 = el('div', 'panel');
+      panel0.appendChild(panelHead('Ransomware Trap'));
+      var b0 = el('div', 'panel-body padded');
+      b0.appendChild(el('div', 't-sec',
+        (data && data.message) ||
+        'No ransomware trap is configured in this deployment. The ransomware detector ' +
+        'still runs inside the emulated FTP/SMB services; the trap adds a hypervisor-agnostic ' +
+        'FUSE share that works on KVM/Proxmox, VMware and Hyper-V without VMI.'));
+      panel0.appendChild(b0);
+      c.appendChild(panel0);
+      return;
+    }
+
+    var v = data.verdict || {};
+    var m = data.metrics || {};
+
+    // Verdict banner.
+    var panel = el('div', 'panel');
+    var badge = v.Confirmed
+      ? el('span', 'tag tag-err', 'RANSOMWARE CONFIRMED')
+      : v.Score > 0 ? el('span', 'tag tag-warn', 'suspicious')
+      : el('span', 'tag tag-ok', 'quiet');
+    panel.appendChild(panelHead('Ransomware Trap', badge));
+    var body = el('div', 'panel-body padded');
+
+    // Suspicion meter.
+    var score = v.Score || 0;
+    body.appendChild(el('div', 't-accent', 'suspicion score: ' + score));
+    var track = el('div', 'progress-track');
+    track.style.marginTop = '8px'; track.style.marginBottom = '16px';
+    var fill = el('div', 'progress-fill');
+    var pct = Math.min(100, score);
+    fill.style.width = pct + '%';
+    fill.style.background = v.Confirmed ? 'var(--err)' : score > 40 ? 'var(--warn)' : 'var(--ok)';
+    track.appendChild(fill);
+    body.appendChild(track);
+
+    // Impact metrics — the numbers that make the defence measurable.
+    var t = el('table', 'kv');
+    kvRow(t, 'files touched', v.FilesTouched != null ? v.FilesTouched : 0);
+    kvRow(t, 'operations seen', m.ops_seen != null ? m.ops_seen : 0);
+    kvRow(t, 'writes seen', m.writes_seen != null ? m.writes_seen : 0);
+    kvRow(t, 'canary hits', m.canary_hits != null ? m.canary_hits : 0);
+    if (m.first_signal_ops) kvRow(t, 'first signal at op', m.first_signal_ops);
+    if (m.confirm_ops) kvRow(t, 'confirmed at op', m.confirm_ops);
+    if (m.tarpit_total) kvRow(t, 'tarpit time imposed', fmtDuration(m.tarpit_total));
+    if ((v.Extensions || []).length) kvRow(t, 'new extensions', v.Extensions.join(', '));
+    if (v.Note) kvRow(t, 'ransom note', v.Note);
+    body.appendChild(t);
+    panel.appendChild(body);
+    c.appendChild(panel);
+
+    // The bait share contents.
+    var listing = data.listing || [];
+    if (listing.length) {
+      var lp = el('div', 'panel');
+      lp.style.marginTop = '16px';
+      lp.appendChild(panelHead('Trap Share (top level)'));
+      var lb = el('div', 'panel-body padded');
+      var tbl = el('table', 'tbl');
+      var thead = el('thead'); var hr = el('tr');
+      ['Name', 'Type', 'Size', 'Canary'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+      thead.appendChild(hr); tbl.appendChild(thead);
+      var tbody = el('tbody');
+      listing.forEach(function (e) {
+        var tr = el('tr');
+        tr.appendChild(el('td', null, e.Name));
+        tr.appendChild(el('td', 'narrow', e.Dir ? 'dir' : 'file'));
+        tr.appendChild(el('td', 'narrow', e.Dir ? '-' : String(e.Size)));
+        var cTd = el('td', 'narrow');
+        if (e.Canary) cTd.appendChild(el('span', 't-warn', 'canary'));
+        tr.appendChild(cTd);
+        tbody.appendChild(tr);
+      });
+      tbl.appendChild(tbody);
+      lb.appendChild(tbl);
+      lp.appendChild(lb);
+      c.appendChild(lp);
+    }
+  });
+}
+
+// fmtDuration renders a Go nanosecond duration (as JSON number) as a short
+// human string.
+function fmtDuration(ns) {
+  if (ns == null) return '';
+  var s = ns / 1e9;
+  if (s < 1) return Math.round(ns / 1e6) + 'ms';
+  if (s < 60) return s.toFixed(1) + 's';
+  var m = Math.floor(s / 60);
+  return m + 'm ' + Math.round(s - m * 60) + 's';
 }
 
 // VIEW: TOPOLOGY (deception estate map)
