@@ -888,6 +888,12 @@ func splitList(s string) []string {
 
 // vmsCmd is the operator's handle on full-OS decoys.
 func vmsCmd(args []string) error {
+	// A subcommand that talks to a compute driver directly (not the running
+	// director's API), for validating a driver against a live hypervisor.
+	if len(args) > 0 && args[0] == "smoketest" {
+		return smoketestCmd(args[1:])
+	}
+
 	fs := flag.NewFlagSet("vms", flag.ExitOnError)
 	addr := fs.String("api", "http://127.0.0.1:8422", "director API base URL")
 	token := fs.String("token", "", "bearer token, if the API requires one")
