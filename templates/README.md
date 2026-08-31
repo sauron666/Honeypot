@@ -57,3 +57,10 @@ packer build -var "output_dir=/var/lib/libvirt/images" \
 - `/etc/machine-id` се трънква при build, за да се генерира при boot.
 - Паролите идват от cloud-init, не от шаблона — иначе всеки клон споделя
   паролата на шаблона.
+
+## windows-vmi/
+
+Turnkey настройка за **пълна VMI интроспекция** на Windows guest (DRAKVUF на
+Xen). `generate-isf-profile.sh` прави libvmi ISF профила от живия guest;
+`README.md` е пълното ръководство (Xen 4.20 капани, хардуерни изисквания).
+Живо валидирано на Windows Server 2025 — виж `docs/adr/ADR-010`.
