@@ -19,6 +19,7 @@ var NAV = [
   { id: 'decoys',      icon: '◎', label: 'Decoys & Services' },
   { id: 'tokens',      icon: '◇', label: 'Honeytokens' },
   { id: 'vms',         icon: '□', label: 'Full-OS VMs' },
+  { id: 'images',      icon: '▤', label: 'Image Library' },
   { id: 'forge',       icon: '△', label: 'Detection Rules' },
   { id: 'evidence',    icon: '●', label: 'Evidence Chain' },
   { id: 'compliance',  icon: '✓', label: 'Compliance' },
@@ -220,6 +221,7 @@ var VIEWS = {
   decoys:      viewDecoys,
   tokens:      viewTokens,
   vms:         viewVMs,
+  images:      viewImages,
   forge:       viewForge,
   evidence:    viewEvidence,
   compliance:  viewCompliance,
@@ -1264,6 +1266,143 @@ function viewVMs(c) {
     panel.appendChild(tbl);
     c.appendChild(panel);
   });
+}
+
+// ================================================================
+// VIEW: IMAGE LIBRARY
+// ================================================================
+
+var DIFFS = ['easy', 'medium', 'hard', 'insane'];
+
+function viewImages(c) {
+  return tryApi('/api/images').then(function (data) {
+    c.replaceChildren();
+    var images = (data && data.images) || [];
+    var toolOk = data && data.tool_available;
+
+    var intro = el('div', 'panel');
+    intro.appendChild(panelHead('Decoy Image Library',
+      el('span', 'tag ' + (toolOk ? 'tag-ok' : 'tag-warn'),
+         toolOk ? 'virt-customize ready' : 'virt-customize missing')));
+    var ib = el('div', 'panel-body padded');
+    ib.appendChild(el('div', 't-sec',
+      'Import ISO/OVA/OVF/qcow2/vmdk decoy images, tag them by difficulty, and sanitise ' +
+      '(strip CTF flags, reset known credentials, embed a watermark) before deploying. ' +
+      'Import and apply run from the CLI (miragectl images); the console manages, tags and ' +
+      'previews the sanitisation plan.'));
+    intro.appendChild(ib);
+    c.appendChild(intro);
+
+    if (!images.length) {
+      c.appendChild(emptyState('No images catalogued. Add one: miragectl images import --file box.qcow2 --difficulty hard'));
+      return;
+    }
+
+    var panel = el('div', 'panel');
+    panel.style.marginTop = '16px';
+    var tbl = el('table', 'tbl');
+    var thead = el('thead'); var hr = el('tr');
+    ['ID', 'Difficulty', 'Format', 'Persona', 'Source', 'Sanitised', 'Actions'].forEach(function (h) {
+      hr.appendChild(el('th', null, h));
+    });
+    thead.appendChild(hr); tbl.appendChild(thead);
+    var tbody = el('tbody');
+    images.forEach(function (im) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, im.id));
+
+      // Difficulty as an inline selector so an operator can re-tag in place.
+      var dTd = el('td', 'narrow');
+      var sel = el('select');
+      DIFFS.forEach(function (d) {
+        var opt = el('option', null, d); opt.value = d;
+        if (im.difficulty === d) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', function () {
+        api('/api/images/' + encodeURIComponent(im.id) + '/retag', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ difficulty: sel.value }),
+        }).then(function () { toast('retagged ' + im.id, 'ok'); })
+          .catch(function (e) { toast(e.message, 'err'); });
+      });
+      dTd.appendChild(sel);
+      tr.appendChild(dTd);
+
+      tr.appendChild(el('td', 'narrow', im.format));
+      tr.appendChild(el('td', null, im.persona || '-'));
+      tr.appendChild(el('td', 'narrow', im.source || '-'));
+
+      var sTd = el('td', 'narrow');
+      sTd.appendChild(el('span', im.sanitized ? 't-ok' : 't-warn',
+        im.sanitized ? 'sanitised' : 'NOT sanitised'));
+      tr.appendChild(sTd);
+
+      var aTd = el('td', 'narrow');
+      var planBtn = el('button', 'btn btn-sm btn-secondary', 'Sanitise plan');
+      planBtn.addEventListener('click', function () { showImagePlan(im.id); });
+      aTd.appendChild(planBtn);
+      var rmBtn = el('button', 'btn btn-sm btn-danger', 'Remove');
+      rmBtn.style.marginLeft = '4px';
+      rmBtn.title = 'Forget the catalog entry (the image file is left on disk).';
+      rmBtn.addEventListener('click', function () {
+        confirmModal('Remove image: ' + im.id,
+          'Forget the catalog entry for "' + im.id + '"? The image file on disk is not deleted.'
+        ).then(function (ok) {
+          if (!ok) return;
+          api('/api/images/' + encodeURIComponent(im.id), { method: 'DELETE' }).then(function () {
+            toast('removed ' + im.id, 'ok');
+            viewImages(c).catch(function (e) { toast(e.message, 'err'); });
+          }).catch(function (e) { toast(e.message, 'err'); });
+        });
+      });
+      aTd.appendChild(rmBtn);
+      tr.appendChild(aTd);
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+    panel.appendChild(tbl);
+    c.appendChild(panel);
+
+    // A place for the sanitisation plan to render.
+    var planHost = el('div');
+    planHost.id = 'image-plan-host';
+    planHost.style.marginTop = '16px';
+    c.appendChild(planHost);
+  });
+}
+
+function showImagePlan(id) {
+  var host = $('image-plan-host');
+  if (!host) return;
+  host.replaceChildren(loading());
+  tryApi('/api/images/' + encodeURIComponent(id) + '/plan').then(function (data) {
+    host.replaceChildren();
+    if (!data) { host.appendChild(emptyState('Could not load the plan.')); return; }
+    var panel = el('div', 'panel');
+    panel.appendChild(panelHead('Sanitisation plan: ' + id,
+      el('span', 'tag ' + (data.tool_available ? 'tag-ok' : 'tag-warn'),
+         data.tool_available ? 'auto-apply ready' : 'CLI apply needed')));
+    var body = el('div', 'panel-body padded');
+    body.appendChild(el('div', 't-sec', data.note || ''));
+    var tbl = el('table', 'tbl');
+    tbl.style.marginTop = '10px';
+    var thead = el('thead'); var hr = el('tr');
+    ['#', 'Action', 'Target'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    thead.appendChild(hr); tbl.appendChild(thead);
+    var tbody = el('tbody');
+    (data.actions || []).forEach(function (a, i) {
+      var tr = el('tr');
+      tr.appendChild(el('td', 'narrow', String(i + 1)));
+      tr.appendChild(el('td', 'narrow', a.kind));
+      tr.appendChild(el('td', null, a.target));
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+    body.appendChild(tbl);
+    panel.appendChild(body);
+    host.appendChild(panel);
+  }).catch(function (e) { host.replaceChildren(emptyState(e.message)); });
 }
 
 // ================================================================

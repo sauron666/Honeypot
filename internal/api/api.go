@@ -26,6 +26,7 @@ import (
 
 	"github.com/sauron666/Honeypot/internal/alert"
 	"github.com/sauron666/Honeypot/internal/assure"
+	"github.com/sauron666/Honeypot/internal/catalog"
 	"github.com/sauron666/Honeypot/internal/compliance"
 	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/drivers"
@@ -66,7 +67,9 @@ type Deps struct {
 	// Observer watches inside full-OS decoys from the hypervisor.
 	Observer drivers.ObserverDriver
 	// Trap is the hypervisor-agnostic ransomware trap, when configured.
-	Trap      *fusetrap.Trap
+	Trap *fusetrap.Trap
+	// Images is the decoy image library.
+	Images    *catalog.Catalog
 	Tenant    string
 	Site      string
 	StartedAt time.Time
@@ -140,6 +143,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/observer", s.observerStatus)
 	s.mux.HandleFunc("POST /api/observer/{id}/dump", s.observerDump)
 	s.mux.HandleFunc("GET /api/trap", s.trapStatus)
+	s.mux.HandleFunc("GET /api/images", s.imagesList)
+	s.mux.HandleFunc("GET /api/images/{id}/plan", s.imagePlan)
+	s.mux.HandleFunc("POST /api/images/{id}/retag", s.imageRetag)
+	s.mux.HandleFunc("DELETE /api/images/{id}", s.imageRemove)
 
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -1183,6 +1190,83 @@ func (s *Server) trapStatus(w http.ResponseWriter, r *http.Request) {
 		"metrics": m,
 		"listing": s.deps.Trap.List("/"),
 	})
+}
+
+// imagesList returns the decoy image library.
+func (s *Server) imagesList(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Images == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"images": []any{}})
+		return
+	}
+	f := catalog.Filter{
+		Difficulty:    catalog.Difficulty(r.URL.Query().Get("difficulty")),
+		Persona:       r.URL.Query().Get("persona"),
+		SanitizedOnly: r.URL.Query().Get("sanitized") == "true",
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"images":         s.deps.Images.List(f),
+		"tool_available": catalog.ToolAvailable(),
+	})
+}
+
+// imagePlan returns the sanitisation plan for one image (a dry-run preview).
+func (s *Server) imagePlan(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Images == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no image library"})
+		return
+	}
+	id := r.PathValue("id")
+	im, ok := s.deps.Images.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no image " + id})
+		return
+	}
+	wm := r.URL.Query().Get("watermark")
+	if wm == "" {
+		wm = im.ID
+	}
+	plan := im.Plan(catalog.DefaultCTFRuleset(wm))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"image":          im,
+		"actions":        plan,
+		"tool_available": catalog.ToolAvailable(),
+		"note": "apply from the CLI: miragectl images sanitize --id " + im.ID +
+			" --apply (needs libguestfs virt-customize)",
+	})
+}
+
+// imageRetag changes an image's difficulty and/or tags.
+func (s *Server) imageRetag(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Images == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no image library"})
+		return
+	}
+	id := r.PathValue("id")
+	var body struct {
+		Difficulty string   `json:"difficulty"`
+		Tags       []string `json:"tags"`
+	}
+	json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body)
+	if err := s.deps.Images.Retag(id, catalog.Difficulty(body.Difficulty), body.Tags); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	im, _ := s.deps.Images.Get(id)
+	writeJSON(w, http.StatusOK, im)
+}
+
+// imageRemove forgets an image entry (the file on disk is left alone).
+func (s *Server) imageRemove(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Images == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no image library"})
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.deps.Images.Remove(id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "removed": "true"})
 }
 
 // observerStatus reports the observer driver's status and capabilities.

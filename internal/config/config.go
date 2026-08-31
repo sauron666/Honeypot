@@ -48,6 +48,13 @@ type Config struct {
 	Presence   presence.HubConfig `yaml:"presence"`
 	VMs        VMFarmConfig       `yaml:"vms"`
 	Trap       TrapConfig         `yaml:"trap"`
+	Images     ImagesConfig       `yaml:"images"`
+}
+
+// ImagesConfig points at the decoy image library (see internal/catalog).
+type ImagesConfig struct {
+	// Catalog is the JSON registry file. Defaults to <data_dir>/images.json.
+	Catalog string `yaml:"catalog"`
 }
 
 // TrapConfig configures the hypervisor-agnostic ransomware trap: a FUSE-backed

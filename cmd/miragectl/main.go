@@ -70,6 +70,7 @@ commands:
   replay      reconstruct an SSH session from evidence as an asciinema recording
   vault       sign the evidence chain head (+ optional RFC 3161 timestamp), and verify a seal
   vms         list full-OS decoys, and burn or reset one during an incident
+  images      image library: import/list/retag/remove and sanitise decoy images
   status      query a running director over its API
   version     print the version
 
@@ -134,6 +135,8 @@ func main() {
 		err = economicsCmd(args)
 	case "vms":
 		err = vmsCmd(args)
+	case "images":
+		err = imagesCmd(args)
 	case "status":
 		err = status(args)
 	case "version":

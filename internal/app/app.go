@@ -19,6 +19,7 @@ import (
 	"github.com/sauron666/Honeypot/internal/alert"
 	"github.com/sauron666/Honeypot/internal/api"
 	"github.com/sauron666/Honeypot/internal/bus"
+	"github.com/sauron666/Honeypot/internal/catalog"
 	"github.com/sauron666/Honeypot/internal/config"
 	"github.com/sauron666/Honeypot/internal/drivers"
 	"github.com/sauron666/Honeypot/internal/drivers/observer"
@@ -55,6 +56,9 @@ type App struct {
 	// Trap is the hypervisor-agnostic ransomware trap, when configured. It is
 	// a FUSE share whose operations feed the ransomware detector and tarpit.
 	Trap *fusetrap.Trap
+
+	// Images is the decoy image library: import, tag by difficulty, sanitise.
+	Images *catalog.Catalog
 
 	// compute is retained so the trap can snapshot a decoy on confirmation.
 	compute   drivers.ComputeDriver
@@ -199,6 +203,18 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		a.buildTrap(cfg, log)
 	}
 
+	// The image library is always available so the console can manage decoy
+	// images even before any VM farm is configured. It is a metadata registry;
+	// an empty or missing file is a valid empty catalog.
+	catalogPath := cfg.Images.Catalog
+	if catalogPath == "" {
+		catalogPath = filepath.Join(cfg.DataDir, "images.json")
+	}
+	a.Images, err = catalog.Open(catalogPath)
+	if err != nil {
+		return nil, err
+	}
+
 	a.API, err = api.New(cfg.API.Listen, api.Deps{
 		Store: evStore, Tracker: a.Tracker, Farm: a.Farm, Registry: a.Registry,
 		Dispatcher: a.Dispatcher, Tokens: a.Tokens, RunningConfig: cfg,
@@ -207,6 +223,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		VMs:      a.VMs,
 		Observer: a.Observer,
 		Trap:     a.Trap,
+		Images:   a.Images,
 		Tenant:   cfg.Tenant, Site: cfg.Site,
 		StartedAt: a.started, Log: log, Token: cfg.API.Token,
 	})
