@@ -115,7 +115,7 @@ func (m *mysqlSvc) Serve(ctx context.Context, conn net.Conn, s *Session) error {
 // can recompute for each candidate.
 func (m *mysqlSvc) verify(user string, authResp, salt []byte) (bool, string) {
 	if len(authResp) != 20 {
-		return len(authResp) == 0 && m.p.Accepts(user, "", 1), ""
+		return len(authResp) == 0 && m.p.Accepts(user, ""), ""
 	}
 	candidates := append([]string{}, m.p.WeakSecrets[user]...)
 	candidates = append(candidates, m.p.WeakSecrets["*"]...)

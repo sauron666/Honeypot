@@ -44,7 +44,6 @@ func buildFileServer(seed string) *Persona {
 		"fileadmin": {"fileadmin", "Welcome1", "Company2025"},
 		"root":      {"root", "toor"},
 	}
-	p.AcceptAfter = 3
 
 	fs := NewVFS()
 	p.FS = fs

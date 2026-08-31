@@ -76,7 +76,7 @@ func (t *telnetSvc) Serve(ctx context.Context, conn net.Conn, s *Session) error 
 		}
 		conn.Write([]byte{iac, wont, echo})
 
-		accepted := t.p.Accepts(user, pass, attempt)
+		accepted := t.p.AcceptsLogin(user, pass)
 		s.AddCredential(Credential{Username: user, Secret: pass, Method: "password", Accepted: accepted})
 
 		if !accepted {

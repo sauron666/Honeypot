@@ -313,6 +313,32 @@ canary файлове), `windows/dc` (AD с kerberoast/AS-REP/ADCS/LAPS прим
   чисто (timeout, kill), vm_event остава заключен — следващото стартиране
   гърми с "Device or resource busy". Единственият fix е `xl destroy` + `xl
   create`.
+- **Емулираната auth приема САМО планиран secret за реален акаунт.** `Accepts`
+  (service creds) мачва само `WeakSecrets`; `AcceptsLogin` (SSH/telnet/FTP) +
+  проверява, че потребителят съществува и има login shell. Няма „приеми всичко
+  след N опита" — това беше най-силният honeypot tell (Cowrie-репутацията):
+  атакуващ пробва боклук-парола или измислен юзър (`deploy2:123456` през
+  wildcard) и вижда, че влиза. Пътят навътре е планираната слаба парола, която
+  е в всеки wordlist. `WeakSecrets["*"]` важи само за реален акаунт. Открито при
+  пентест на живо (Steam Deck → web01:2222).
+- **SSH KEXINIT е fingerprint — Go не може да е byte-perfect OpenSSH.** Ръчно
+  подредени `cfg.KeyExchanges/Ciphers/MACs` спрямо OpenSSH 9.2p1 (chacha20 води,
+  без SHA-1 legacy dh-group14-sha1/hmac-sha1-96) + ecdsa host key (Debian 12 го
+  генерира). Но x/crypto/ssh НЯМА sntrup761x25519 (PQ KEX) и umac-* — ssh-audit
+  пак различава емулирания сървър. Byte-perfect SSH иска реален OpenSSH в пълна
+  VM примамка (farm пътят); емулираният е за breadth. Честно е в коментара.
+- **Виртуалната ФС е read-only; писането е per-session overlay.** Атакуващ, който
+  drop-ва webshell/SSH ключ/payload, трябва да го прочете обратно (write-then-read
+  е класически honeypot probe) — иначе tell. `Shell.written` държи overlay-а НАД
+  персона VFS-а; редиректите (`>`/`>>`), `touch`, `mkdir` пишат там. Никога не
+  мутира споделения VFS → няма race (shell-ът е една горутина, VFS остава
+  immutable за всички други четци). Ограничено до 8 MB на сесия. authorized_keys/
+  webshell/passwd write → critical persistence event.
+- **mount/df/lsblk/fdisk трябва да разказват една история.** `mount` падаше в
+  `lsblk` изхода (NAME MAJ:MIN вместо `/dev/sda1 on / type ext4`) — решаващ tell.
+  Един източник на истина: sda1=/, sda2=swap, sdb1=/home; всяка disk команда го
+  рендерира. df също беше грешна (sda2=/home). `sudo -l` пък run-ваше „-l" като
+  команда (`-bash: -l: command not found`) — сега sudo си парсва флаговете.
 
 ---
 

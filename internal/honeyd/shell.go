@@ -28,6 +28,21 @@ type Shell struct {
 	// downloads collects every URL the attacker tried to fetch; these are the
 	// second-stage payload locations and are worth more than the shell itself.
 	downloads []string
+	// written is this session's overlay: files and directories the attacker
+	// creates (redirection, touch, mkdir). It sits on top of the read-only
+	// persona VFS so writes survive within the session -- a decoy that silently
+	// drops an SSH key or a webshell is an obvious tell -- without ever mutating
+	// the shared filesystem. The shell runs in one goroutine, so no lock is
+	// needed; keeping the persona VFS immutable keeps every other reader safe.
+	written map[string]*ovNode
+}
+
+// ovNode is one attacker-created filesystem entry in the session overlay.
+type ovNode struct {
+	dir     bool
+	content string
+	owner   string
+	mtime   time.Time
 }
 
 // NewShell starts a shell session for a user.
@@ -40,6 +55,7 @@ func NewShell(p *Persona, s *Session, user string) *Shell {
 	}
 	return &Shell{
 		p: p, s: s, user: user, cwd: home,
+		written: map[string]*ovNode{},
 		env: map[string]string{
 			"HOME": home, "USER": user, "LOGNAME": user, "SHELL": "/bin/bash",
 			"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -124,7 +140,20 @@ func splitCompound(line string) []string {
 	return out
 }
 
+// runOne executes one simple command, honouring output redirection (> and >>).
+// A redirected command's stdout lands in the session overlay instead of the
+// terminal, so `echo pwned > /tmp/x` followed by `cat /tmp/x` behaves like a
+// real host -- the write-then-read probe every honeypot detector runs.
 func (sh *Shell) runOne(line string) (string, bool) {
+	line, redir := parseRedirect(line)
+	out, exit := sh.dispatch(line)
+	if redir != nil {
+		return sh.applyRedirect(redir, out), exit
+	}
+	return out, exit
+}
+
+func (sh *Shell) dispatch(line string) (string, bool) {
 	args := tokenize(line)
 	if len(args) == 0 {
 		return "", false
@@ -196,7 +225,7 @@ func (sh *Shell) runOne(line string) (string, bool) {
 	case "sudo":
 		return sh.sudo(rest), false
 	case "su":
-		return "su: Authentication failure\n", false
+		return sh.su(rest), false
 	case "apt", "apt-get", "yum", "dnf", "apk":
 		return sh.pkg(cmd, rest), false
 	case "systemctl", "service":
@@ -207,7 +236,11 @@ func (sh *Shell) runOne(line string) (string, bool) {
 		return sh.rm(rest), false
 	case "chmod", "chown", "chattr":
 		return "", false
-	case "mkdir", "touch", "cp", "mv", "ln":
+	case "touch":
+		return sh.touch(rest), false
+	case "mkdir":
+		return sh.mkdir(rest), false
+	case "cp", "mv", "ln":
 		return "", false
 	case "which", "whereis", "type", "command":
 		return sh.which(rest), false
@@ -223,8 +256,14 @@ func (sh *Shell) runOne(line string) (string, bool) {
 		return fmt.Sprintf("%s: command not found\n", cmd), false
 	case "docker", "kubectl", "podman":
 		return fmt.Sprintf("%s: command not found\n", cmd), false
-	case "lsblk", "mount", "fdisk":
+	case "lsblk":
 		return sh.lsblk(), false
+	case "mount":
+		return sh.mount(), false
+	case "fdisk":
+		return sh.fdisk(rest), false
+	case "dmesg":
+		return sh.dmesg(), false
 	case "lscpu":
 		return sh.lscpu(), false
 	case "cd..":
@@ -287,12 +326,18 @@ func (sh *Shell) cd(args []string) string {
 		}
 	}
 	abs := Resolve(sh.cwd, target)
-	n, ok := sh.p.FS.Lookup(abs)
-	if !ok {
-		return fmt.Sprintf("-bash: cd: %s: No such file or directory\n", target)
-	}
-	if !n.Dir {
-		return fmt.Sprintf("-bash: cd: %s: Not a directory\n", target)
+	if ov, ok := sh.written[abs]; ok {
+		if !ov.dir {
+			return fmt.Sprintf("-bash: cd: %s: Not a directory\n", target)
+		}
+	} else {
+		n, ok := sh.p.FS.Lookup(abs)
+		if !ok {
+			return fmt.Sprintf("-bash: cd: %s: No such file or directory\n", target)
+		}
+		if !n.Dir {
+			return fmt.Sprintf("-bash: cd: %s: Not a directory\n", target)
+		}
 	}
 	sh.env["OLDPWD"] = sh.cwd
 	sh.cwd = abs
@@ -320,17 +365,25 @@ func (sh *Shell) ls(cmd string, args []string) string {
 	if target != "" {
 		abs = Resolve(sh.cwd, target)
 	}
-	n, ok := sh.p.FS.Lookup(abs)
-	if !ok {
+	if ov, ok := sh.written[abs]; ok && !ov.dir {
+		vn := ov.vnode(path.Base(abs))
+		if long {
+			return vn.LongFormat() + "\n"
+		}
+		return vn.Name + "\n"
+	}
+	n, baseOK := sh.p.FS.Lookup(abs)
+	_, ovDir := sh.written[abs]
+	if !baseOK && !ovDir {
 		return fmt.Sprintf("ls: cannot access '%s': No such file or directory\n", target)
 	}
-	if !n.Dir {
+	if baseOK && !n.Dir {
 		if long {
 			return n.LongFormat() + "\n"
 		}
 		return n.Name + "\n"
 	}
-	entries, _ := sh.p.FS.List(abs)
+	entries := sh.listDir(abs)
 
 	var b strings.Builder
 	if long {
@@ -370,6 +423,16 @@ func (sh *Shell) cat(args []string) string {
 			continue
 		}
 		abs := Resolve(sh.cwd, a)
+		// The session overlay shadows the base VFS: an attacker who just wrote a
+		// file reads back exactly what they wrote.
+		if ov, ok := sh.written[abs]; ok {
+			if ov.dir {
+				fmt.Fprintf(&b, "cat: %s: Is a directory\n", a)
+				continue
+			}
+			b.WriteString(ov.content)
+			continue
+		}
 		n, ok := sh.p.FS.Lookup(abs)
 		if !ok {
 			fmt.Fprintf(&b, "cat: %s: No such file or directory\n", a)
@@ -490,13 +553,19 @@ func (sh *Shell) ps() string {
 	return "USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n" + strings.Join(rows, "\n") + "\n"
 }
 
+// df, mount, lsblk and fdisk must tell the same story: an attacker who runs two
+// of them and finds sda2 mounted at /home in one and marked [SWAP] in another
+// knows the machine is fake. The layout here is the single source of truth --
+// sda1 is /, sda2 is swap, sdb1 is /home -- and every disk command renders it.
 func (sh *Shell) df() string {
 	return "Filesystem     1K-blocks     Used Available Use% Mounted on\n" +
 		"udev             4051360        0   4051360   0% /dev\n" +
 		"tmpfs             815916     1284    814632   1% /run\n" +
-		"/dev/sda1       51340576 18240192  30462128  38% /\n" +
-		"/dev/sda2      206291456 71204864 124584448  37% /home\n" +
-		"tmpfs            4079572        0   4079572   0% /dev/shm\n"
+		"/dev/sda1       50395844 18240192  29572000  39% /\n" +
+		"tmpfs            4079572        0   4079572   0% /dev/shm\n" +
+		"tmpfs               5120        0      5120   0% /run/lock\n" +
+		"/dev/sdb1      206291456 71204864 124584448  37% /home\n" +
+		"tmpfs             815912        0    815912   0% /run/user/0\n"
 }
 
 func (sh *Shell) free() string {
@@ -639,17 +708,55 @@ func (sh *Shell) remote(cmd, line string) string {
 	}
 }
 
+// sudo strips its own options before running what follows. The old version
+// passed the whole tail to the shell, so `sudo -l` tried to run "-l" and
+// produced "-bash: -l: command not found" -- a giveaway, since real sudo
+// parses -l itself. Granting the command keeps the attacker moving, which is
+// the point; the interest is in what they reach for once they think they are root.
 func (sh *Shell) sudo(args []string) string {
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		switch {
+		case a == "-l" || a == "--list":
+			return sh.sudoList()
+		case a == "-v", a == "-k", a == "-K", a == "-n":
+			return "" // validate/reset timestamp: no output on success
+		case a == "-u" || a == "-g" || a == "-p" || a == "-C" || a == "-r" || a == "-t":
+			i += 2 // option that takes an argument
+		case a == "--":
+			i++
+			goto run
+		case strings.HasPrefix(a, "-"):
+			i++ // -H, -E, -s, -i, -b and friends: no argument
+		default:
+			goto run
+		}
+	}
+	// Only options, no command.
 	if len(args) == 0 {
-		return "usage: sudo -h | -K | -k | -V\n"
+		return "usage: sudo -h | -K | -k | -V\nusage: sudo -v [-ABkNnS] [-g group] [-h host] [-p prompt] [-u user]\n"
 	}
-	if sh.user == "root" {
-		out, _ := sh.runOne(strings.Join(args, " "))
-		return out
+	return ""
+run:
+	cmd := strings.Join(args[i:], " ")
+	if cmd == "" {
+		return ""
 	}
-	// Granting sudo keeps the attacker moving, which is the whole point.
-	out, _ := sh.runOne(strings.Join(args, " "))
+	out, _ := sh.runOne(cmd)
 	return out
+}
+
+// sudoList renders `sudo -l`. The planted misconfiguration -- an unprivileged
+// user who may run anything -- is itself the lure: it is the first privilege
+// escalation an attacker checks for, and finding it keeps them engaged.
+func (sh *Shell) sudoList() string {
+	h := sh.p.Hostname
+	return fmt.Sprintf("Matching Defaults entries for %s on %s:\n"+
+		"    env_reset, mail_badpass,\n"+
+		"    secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/sbin\\:/usr/bin\\:/sbin\\:/bin, use_pty\n\n"+
+		"User %s may run the following commands on %s:\n"+
+		"    (ALL : ALL) ALL\n", sh.user, h, sh.user, h)
 }
 
 func (sh *Shell) pkg(cmd string, args []string) string {

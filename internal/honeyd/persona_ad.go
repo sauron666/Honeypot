@@ -47,7 +47,6 @@ func buildWindowsDC(seed string) *Persona {
 		"svc_backup":    {"Backup2024!", "Summer2025!"},
 		"*":             {"Password1"},
 	}
-	p.AcceptAfter = 4
 
 	fs := NewVFS()
 	p.FS = fs

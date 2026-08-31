@@ -2,7 +2,9 @@ package honeyd
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -13,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -35,13 +36,10 @@ type sshSvc struct {
 	config      *ssh.ServerConfig
 	hostKeyPath string
 	maxAuth     int
-
-	mu       sync.Mutex
-	attempts map[string]int // per-source authentication attempt counter
 }
 
 func newSSH(p *Persona, opts map[string]any) (Service, error) {
-	s := &sshSvc{p: p, maxAuth: 6, attempts: map[string]int{}}
+	s := &sshSvc{p: p, maxAuth: 6}
 	if v, ok := opts["max_auth_tries"].(int); ok && v > 0 {
 		s.maxAuth = v
 	}
@@ -56,6 +54,32 @@ func newSSH(p *Persona, opts map[string]any) (Service, error) {
 		// and it must never be a value a honeypot detector has seen before.
 		ServerVersion: p.SSHBanner,
 		MaxAuthTries:  s.maxAuth,
+	}
+	// The KEXINIT algorithm lists are a fingerprint too, and Go's defaults are
+	// not OpenSSH's: they lead ciphers with aes-gcm (OpenSSH leads chacha20),
+	// and they still advertise the SHA-1 legacy (diffie-hellman-group14-sha1,
+	// hmac-sha1-96) that a modern OpenSSH server dropped. ssh-audit reads these
+	// straight off the wire. Align them with what OpenSSH 9.2p1 on bookworm
+	// offers, in its order, restricted to what x/crypto/ssh actually implements.
+	//
+	// Honest ceiling: x/crypto/ssh has no sntrup761x25519 (the post-quantum KEX
+	// OpenSSH 9.x leads with) and no umac-* MACs, so this narrows the gap but
+	// cannot close it -- a determined ssh-audit run still distinguishes the
+	// emulated server. Byte-perfect SSH realism needs a real OpenSSH inside a
+	// full-OS VM decoy (the farm path); this is the breadth-over-depth service.
+	cfg.KeyExchanges = []string{
+		"curve25519-sha256", "curve25519-sha256@libssh.org",
+		"ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
+		"diffie-hellman-group16-sha512", "diffie-hellman-group14-sha256",
+	}
+	cfg.Ciphers = []string{
+		"chacha20-poly1305@openssh.com",
+		"aes128-ctr", "aes192-ctr", "aes256-ctr",
+		"aes128-gcm@openssh.com", "aes256-gcm@openssh.com",
+	}
+	cfg.MACs = []string{
+		"hmac-sha2-256-etm@openssh.com", "hmac-sha2-512-etm@openssh.com",
+		"hmac-sha2-256", "hmac-sha2-512", "hmac-sha1",
 	}
 	if err := s.loadHostKeys(cfg); err != nil {
 		return nil, err
@@ -73,12 +97,21 @@ func (s *sshSvc) loadHostKeys(cfg *ssh.ServerConfig) error {
 	if err := os.MkdirAll(s.hostKeyPath, 0o700); err != nil {
 		return fmt.Errorf("ssh: host key directory: %w", err)
 	}
-	// OpenSSH offers both, and so must we.
+	// ssh-keygen -A on Debian 12 generates ed25519, ecdsa and rsa host keys, so
+	// a real bookworm box advertises all three host-key algorithms. Offering
+	// only ed25519+rsa (the old default here) was itself a tell -- ssh-audit
+	// flags the missing ecdsa-sha2-nistp256. Add them in OpenSSH's order.
 	edSigner, err := s.loadOrCreate("ssh_host_ed25519_key", genEd25519)
 	if err != nil {
 		return err
 	}
 	cfg.AddHostKey(edSigner)
+
+	ecdsaSigner, err := s.loadOrCreate("ssh_host_ecdsa_key", genECDSA)
+	if err != nil {
+		return err
+	}
+	cfg.AddHostKey(ecdsaSigner)
 
 	rsaSigner, err := s.loadOrCreate("ssh_host_rsa_key", genRSA)
 	if err != nil {
@@ -121,6 +154,18 @@ func genEd25519() ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
+func genECDSA() ([]byte, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+}
+
 func genRSA() ([]byte, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
@@ -131,26 +176,14 @@ func genRSA() ([]byte, error) {
 	}), nil
 }
 
-func (s *sshSvc) nextAttempt(src string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.attempts[src]++
-	// Bound the map so a spray across many sources cannot grow it forever.
-	if len(s.attempts) > 10000 {
-		s.attempts = map[string]int{src: s.attempts[src]}
-	}
-	return s.attempts[src]
-}
-
 func (s *sshSvc) Serve(ctx context.Context, conn net.Conn, sess *Session) error {
 	// Per-connection config so that auth callbacks can reach this session.
 	cfg := *s.config
 	var authedUser string
 
 	cfg.PasswordCallback = func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-		attempt := s.nextAttempt(sess.SrcIP())
 		user := c.User()
-		accepted := s.p.Accepts(user, string(pass), attempt)
+		accepted := s.p.AcceptsLogin(user, string(pass))
 		sess.AddCredential(Credential{
 			Username: user, Secret: string(pass), Method: "password", Accepted: accepted,
 		})
@@ -179,8 +212,7 @@ func (s *sshSvc) Serve(ctx context.Context, conn net.Conn, sess *Session) error 
 		if err != nil || len(answers) == 0 {
 			return nil, fmt.Errorf("permission denied")
 		}
-		attempt := s.nextAttempt(sess.SrcIP())
-		accepted := s.p.Accepts(c.User(), answers[0], attempt)
+		accepted := s.p.AcceptsLogin(c.User(), answers[0])
 		sess.AddCredential(Credential{
 			Username: c.User(), Secret: answers[0], Method: "keyboard-interactive", Accepted: accepted,
 		})

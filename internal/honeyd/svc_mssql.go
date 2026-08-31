@@ -67,7 +67,7 @@ func (m *mssqlSvc) Serve(ctx context.Context, conn net.Conn, s *Session) error {
 
 		case tdsLogin7:
 			user, pass, host, app, db := parseLogin7(payload)
-			accepted := m.p.Accepts(user, pass, 1)
+			accepted := m.p.Accepts(user, pass)
 			s.AddCredential(Credential{
 				Username: user, Secret: pass, Method: "mssql-sql-auth", Accepted: accepted,
 			})

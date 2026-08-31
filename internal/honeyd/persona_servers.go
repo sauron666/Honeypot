@@ -39,14 +39,13 @@ func buildLinuxWeb(seed string) *Persona {
 		{Name: "deploy", UID: 1000, GID: 1000, Home: "/home/deploy", Shell: "/bin/bash", Gecos: "Deployment user,,,"},
 		{Name: "backup", UID: 1001, GID: 1001, Home: "/home/backup", Shell: "/bin/bash", Gecos: "Backup agent,,,"},
 	}
-	// Two ways in: a planted weak password, and eventual acceptance so a
-	// brute-force run that never guesses it still gets observed inside.
+	// The way in is a planted weak password common enough to sit in any
+	// brute-force wordlist; nothing outside this set is ever accepted.
 	p.WeakSecrets = map[string][]string{
 		"root":   {"root", "toor", "admin123", "P@ssw0rd"},
 		"deploy": {"deploy", "deploy123", "Summer2024!"},
 		"*":      {"123456", "password"},
 	}
-	p.AcceptAfter = 4
 
 	fs := NewVFS()
 	p.FS = fs
@@ -124,7 +123,6 @@ func buildLinuxDB(seed string) *Persona {
 		"dba":  {"dba", "dba123", "Database1"},
 		"*":    {"123456"},
 	}
-	p.AcceptAfter = 4
 
 	fs := NewVFS()
 	p.FS = fs
@@ -218,7 +216,6 @@ func buildLinuxBackup(seed string) *Persona {
 		"backup": {"backup", "backup123", "Backup2024"},
 		"root":   {"root", "nas", "admin"},
 	}
-	p.AcceptAfter = 3
 
 	fs := NewVFS()
 	p.FS = fs

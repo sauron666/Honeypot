@@ -127,7 +127,7 @@ func (f *ftpSvc) dispatch(ctx context.Context, conn net.Conn, st *ftpState, cmd,
 
 	case "PASS":
 		st.attempt++
-		accepted := f.p.Accepts(st.user, arg, st.attempt)
+		accepted := f.p.AcceptsLogin(st.user, arg)
 		s.AddCredential(Credential{Username: st.user, Secret: arg, Method: "ftp", Accepted: accepted})
 		if !accepted {
 			time.Sleep(1200 * time.Millisecond) // real servers are slow to reject

@@ -40,14 +40,12 @@ type Persona struct {
 	// BootTime backs uptime output. Real servers have been up for months.
 	BootTime time.Time
 
-	// WeakSecrets are the credentials the decoy accepts. Accepting an attacker
-	// is the point: a decoy that never lets anyone in observes nothing.
+	// WeakSecrets are the credentials the decoy accepts, keyed by username
+	// ("*" applies to any real account). Accepting an attacker is the point: a
+	// decoy that never lets anyone in observes nothing. They are common enough
+	// to sit in any brute-force wordlist, which is the realistic way in --
+	// nothing outside this set is ever accepted (see Accepts).
 	WeakSecrets map[string][]string
-
-	// AcceptAfter lets any credential through after this many attempts, so a
-	// brute-force run that never guesses our planted password still ends up
-	// inside where we can watch it. Zero disables.
-	AcceptAfter int
 
 	// Seed is the deployment seed this persona was built from. Content derived
 	// from it is stable across restarts and different between installations,
@@ -195,8 +193,19 @@ func (p *Persona) Uptime(now time.Time) string {
 		now.Format("15:04:05"), days, hours, mins, load)
 }
 
-// Accepts reports whether the decoy lets this credential in. attempt is 1-based.
-func (p *Persona) Accepts(user, secret string, attempt int) bool {
+// Accepts reports whether a service credential matches one the decoy was
+// planted with. It is the credential test for services whose username space is
+// not the OS account list -- a database login, for instance -- so it checks the
+// secret only.
+//
+// It deliberately does NOT let anything through "after N tries". A real server
+// accepts exactly one thing: the correct secret. Accepting a password no
+// account has is the single most reliable honeypot heuristic there is (it is
+// what Cowrie is known for and what an analyst probes for first, with a random
+// string), so there is no realistic version of it -- the way in is the planted
+// weak secret, which any real brute-force wordlist contains, and a run that
+// never guesses one simply never gets in, exactly as on a real vulnerable host.
+func (p *Persona) Accepts(user, secret string) bool {
 	for _, s := range p.WeakSecrets[user] {
 		if s == secret {
 			return true
@@ -207,7 +216,41 @@ func (p *Persona) Accepts(user, secret string, attempt int) bool {
 			return true
 		}
 	}
-	return p.AcceptAfter > 0 && attempt >= p.AcceptAfter
+	return false
+}
+
+// AcceptsLogin is the credential test for an interactive OS login (SSH, telnet,
+// FTP). On top of the planted-secret check it requires the account to exist:
+// logging in as a username the machine has no account for -- deploy2, an
+// invented service name -- is a tell as loud as a garbage password, because a
+// real sshd fails it every time. The wildcard secrets ("123456") therefore let
+// an attacker in only for a real user, never for one they made up.
+func (p *Persona) AcceptsLogin(user, secret string) bool {
+	return p.hasUser(user) && p.Accepts(user, secret)
+}
+
+// hasUser reports whether the persona has a login account by this name. It is
+// the OS account list (root and the persona's users), not the full /etc/passwd:
+// system accounts like nobody or www-data exist in passwd but carry a nologin
+// shell, so a real server refuses to log them in too.
+func (p *Persona) hasUser(name string) bool {
+	for _, u := range p.Users {
+		if u.Name == name && loginShell(u.Shell) {
+			return true
+		}
+	}
+	return false
+}
+
+// loginShell reports whether a shell actually grants a session (i.e. is not one
+// of the nologin/false stubs a real system gives service accounts).
+func loginShell(sh string) bool {
+	switch sh {
+	case "", "/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false":
+		return false
+	default:
+		return true
+	}
 }
 
 // aged returns a timestamp a plausible distance in the past, deterministically.
