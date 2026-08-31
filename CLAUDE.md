@@ -118,9 +118,13 @@ enumeration, spraying, AS-REP roast и kerberoast с crackable RC4-HMAC hash),
 (honey MCP/AI сървър — AI/LLM deception), `tokens` (callback приемник),
 `generic`. **17 регистрирани услуги** (`RegisterService`).
 
-**Незавършено (staged):** `internal/honeyd/jit.go` (JITSpawner — спуска временна
-услуга при probe на непривързан порт) е реализиран и тестван, но **не е wire-нат**
-в server-а (нула callers). Идея за бъдещо включване, не мъртъв код за триене.
+**Staged (нарочно unwired):** `internal/honeyd/jit.go` (JITSpawner — реактивно
+спуска временна услуга при probe на well-known порт). **Не е wire-нат** в server-а
+(нула callers) — включва се по-късно при нужда. Вече има **scan guard**
+(`scanGuard`): източник, който удря ≥ScanThreshold различни порта в ScanWindow, се
+маркира като скенер и се потиска за cooldown — nmap sweep НЕ вдига декой на всеки
+порт (+ MaxActive hard cap). `OnProbe(ctx, sourceIP, addr, port)`. 5 теста за
+guard-а. Не се трие — етапна работа със защита готова за включване.
 
 ### Персони (`internal/honeyd/persona_*.go`)
 
