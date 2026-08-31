@@ -33,10 +33,10 @@ API endpoint-и (GET /api/observer, POST /api/observer/{id}/dump), GUI секц�
 vmi-dump-memory работят на Xen 4.17 HVM domU. **За пълна DRAKVUF интроспекция
 е нужен CPU с VMFUNC** (altp2m) — i3-9100T го няма.
 
-**GUI** — 20-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
+**GUI** — 21-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
 full-OS VMs, images, detection rules, evidence chain, compliance, **observer/VMI**,
 **ransomware trap**, **topology**, presence, **deception packs**, **identity/BEC**,
-**BYOD/wireless**, **global feed**, config, status. VM секцията има start/stop
+**BYOD/wireless**, **global feed**, **alerting**, config, status. VM секцията има start/stop
 бутони; compliance секцията чете от `/api/compliance/{framework}`; topology
 секцията рисува цялата естейт като инлайн SVG звезда (director→decoys/vms/hub/
 agents) от `/api/topology`. **Всяка таблица се сортира** (MutationObserver
@@ -45,7 +45,12 @@ agents) от `/api/topology`. **Всяка таблица се сортира** 
 и „retire" бутон (DELETE /api/decoys/{id}); tokens секцията вече имаше mint/delete.
 **Token auth в GUI**: Bearer от localStorage + cookie `mirage_token`; login
 overlay при 401; статиката е exempt (иначе токенът заключваше конзолата).
-50 REST endpoint-а.
+**Секция „Alerting"** управлява sink-овете на живо (list/add/remove/test +
+праг) — POST/DELETE /api/sinks, POST /api/sinks/test|severity; runtime-only
+(профилът остава източник на истина). **Секция „Images"** качва (POST
+/api/images/upload, multipart, allow-list + size cap + O_EXCL) и регистрира по
+път (POST /api/images) VM образи. Config apply-ът показва `requires_restart`
+явно (immutable настройки при смяна на профил от GUI). 57 REST endpoint-а.
 
 **Туториали** — `docs/tutorials/` (14 броя, български): quickstart, конзола,
 honeytokens, детекции, VM декои, VMI, overlay, AD/Kerberos, breadcrumbs,

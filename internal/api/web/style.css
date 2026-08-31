@@ -283,6 +283,8 @@ tr.clickable:hover td{background:var(--bg-hover)}
 .tag-tok{color:#ffd479;border-color:#4a3c17}
 .tag-ok{color:var(--ok);border-color:#1a3a23}
 .tag-warn{color:var(--warn);border-color:#3a3117}
+.banner{padding:10px 12px;border-radius:var(--radius-s);border:1px solid var(--border);font-size:13px}
+.banner-warn{color:var(--warn);border-color:#3a3117;background:rgba(120,90,20,.08)}
 .tag-err{color:var(--err);border-color:#5a2a2a}
 .tag-accent{color:var(--accent);border-color:#1a2f52}
 

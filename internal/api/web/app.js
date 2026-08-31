@@ -2086,8 +2086,12 @@ function viewObserver(c) {
         'process, file, registry and injection activity, reconstructed without ' +
         'anything inside the guest for the attacker to find or disable.'));
       var hint = el('div', 'help-block');
-      hint.appendChild(el('strong', null, 'To enable:'));
-      hint.appendChild(el('span', null, ' set drivers.observer: drakvuf in your profile and deploy on a Xen dom0 host.'));
+      hint.appendChild(el('strong', null, 'To enable (choose by your hypervisor): '));
+      hint.appendChild(el('span', null,
+        'drivers.observer: drakvuf — agentless VMI, needs a Xen dom0 on a CPU with VMFUNC (altp2m); ' +
+        'or drivers.observer: agent — an in-guest sensor (mirage-sensor) that works on any hypervisor ' +
+        '(KVM/Proxmox/VMware/Hyper-V), at the cost of a sensor in the guest. Set it in your profile and restart. ' +
+        'This is a startup/hardware choice, not a live toggle — the console shows status, the profile owns the config.'));
       msg.appendChild(hint);
       c.appendChild(msg);
       return;
@@ -2568,6 +2572,19 @@ function viewConfig(c) {
         if (r.removed) kvRow(rt, 'removed', r.removed.join(', '));
         if (r.error) kvRow(rt, 'error', r.error);
         resultDiv.appendChild(rt);
+        // Immutable settings (bind address, data_dir, storage...) cannot be
+        // changed in place. Surface them prominently so an operator swapping a
+        // profile from the console knows what applied live and what still needs
+        // a restart, rather than assuming everything took effect.
+        var restart = r.plan && r.plan.requires_restart;
+        if (restart && restart.length) {
+          var warn = el('div', 'banner banner-warn');
+          warn.style.marginTop = '10px';
+          warn.appendChild(el('div', null, '⚠ ' + restart.length +
+            ' setting(s) need a director restart to take effect (applied live: listeners only):'));
+          warn.appendChild(el('div', 't-muted', restart.join(', ')));
+          resultDiv.appendChild(warn);
+        }
         if (r.plan) {
           resultDiv.appendChild(el('pre', null, JSON.stringify(r.plan, null, 2)));
         }
