@@ -66,7 +66,7 @@ func (t *tokenReceiver) Serve(ctx context.Context, conn net.Conn, s *Session) er
 
 		id := tokenIDFromPath(req.URL.Path)
 		if id == "" {
-			writeSimple(conn, "404 Not Found", "text/plain", []byte("Not Found\n"))
+			t.writeSimple(conn, "404 Not Found", "text/plain", []byte("Not Found\n"))
 			continue
 		}
 
@@ -78,7 +78,7 @@ func (t *tokenReceiver) Serve(ctx context.Context, conn net.Conn, s *Session) er
 				WithMessage("callback for an unknown honeytoken id %q", id)
 			e.Set("token_id", id).Set("user_agent", req.UserAgent())
 			s.Emit(e)
-			writeSimple(conn, "404 Not Found", "text/plain", []byte("Not Found\n"))
+			t.writeSimple(conn, "404 Not Found", "text/plain", []byte("Not Found\n"))
 			continue
 		}
 
@@ -97,7 +97,7 @@ func (t *tokenReceiver) Serve(ctx context.Context, conn net.Conn, s *Session) er
 
 		// Answer with something innocuous, so whoever opened the document or
 		// followed the link sees nothing unusual.
-		writeSimple(conn, "200 OK", "image/gif", pixelGIF)
+		t.writeSimple(conn, "200 OK", "image/gif", pixelGIF)
 	}
 	return nil
 }
@@ -121,9 +121,17 @@ func tokenIDFromPath(p string) string {
 	return id
 }
 
-func writeSimple(w net.Conn, status, contentType string, body []byte) {
-	fmt.Fprintf(w, "HTTP/1.1 %s\r\nDate: %s\r\nServer: nginx\r\nContent-Type: %s\r\n"+
+func (t *tokenReceiver) writeSimple(w net.Conn, status, contentType string, body []byte) {
+	// The Server header is a fingerprint. A bare "nginx" beside a web decoy that
+	// answers "nginx/1.22.1" on the same estate is a tell -- one machine running
+	// two nginx versions -- so mirror the persona's advertised server, with a
+	// versioned fallback for personas that carry no HTTP identity.
+	server := t.p.HTTPServer
+	if server == "" {
+		server = "nginx/1.22.1"
+	}
+	fmt.Fprintf(w, "HTTP/1.1 %s\r\nDate: %s\r\nServer: %s\r\nContent-Type: %s\r\n"+
 		"Content-Length: %d\r\nCache-Control: no-store\r\nConnection: keep-alive\r\n\r\n",
-		status, time.Now().UTC().Format(http.TimeFormat), contentType, len(body))
+		status, time.Now().UTC().Format(http.TimeFormat), server, contentType, len(body))
 	w.Write(body)
 }
