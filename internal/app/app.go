@@ -224,7 +224,19 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		Observer: a.Observer,
 		Trap:     a.Trap,
 		Images:   a.Images,
-		Tenant:   cfg.Tenant, Site: cfg.Site,
+		ImagesUploadDir: func() string {
+			if cfg.Images.UploadDir != "" {
+				return cfg.Images.UploadDir
+			}
+			return filepath.Join(cfg.DataDir, "images")
+		}(),
+		ImagesMaxUploadBytes: func() int64 {
+			if cfg.Images.MaxUploadBytes > 0 {
+				return cfg.Images.MaxUploadBytes
+			}
+			return 8 << 30 // 8 GiB
+		}(),
+		Tenant: cfg.Tenant, Site: cfg.Site,
 		StartedAt: a.started, Log: log, Token: cfg.API.Token,
 	})
 	if err != nil {

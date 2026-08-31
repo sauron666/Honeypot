@@ -1553,6 +1553,67 @@ function viewVMs(c) {
 
 var DIFFS = ['easy', 'medium', 'hard', 'insane'];
 
+// imageAddPanel builds the two ways to add a decoy image: register a file
+// already on the host by path (the catalog's native model), or upload one
+// through the browser (guarded server-side: allow-listed extension, base name
+// only, size cap, no overwrite).
+function imageAddPanel(c) {
+  var refresh = function () { viewImages(c).catch(function (e) { toast(e.message, 'err'); }); };
+  var panel = el('div', 'panel'); panel.style.marginTop = '16px';
+  panel.appendChild(panelHead('Add an image'));
+  var body = el('div', 'panel-body padded');
+
+  // --- Register by path ---
+  body.appendChild(el('div', 't-sec', 'Register a file already on the host (nothing is copied):'));
+  var r1 = el('div', 'form-row'); r1.style.marginTop = '8px';
+  var pathInp = el('input', 'f-input'); pathInp.placeholder = '/var/lib/mirage/images/box.qcow2'; pathInp.style.flex = '1';
+  var pDiff = el('select', 'f-select');
+  DIFFS.forEach(function (d) { pDiff.appendChild(new Option(d, d)); });
+  var pPersona = el('input', 'f-input'); pPersona.placeholder = 'persona (optional)'; pPersona.style.maxWidth = '160px';
+  var regBtn = el('button', 'btn btn-primary', 'Register');
+  regBtn.addEventListener('click', function () {
+    if (!pathInp.value.trim()) { toast('Enter a file path', 'err'); return; }
+    api('/api/images', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: pathInp.value.trim(), difficulty: pDiff.value, persona: pPersona.value.trim(), checksum: true }),
+    }).then(function (im) { toast('Registered ' + (im.id || 'image'), 'ok'); refresh(); })
+      .catch(function (e) { toast(e.message, 'err'); });
+  });
+  r1.appendChild(pathInp); r1.appendChild(pDiff); r1.appendChild(pPersona); r1.appendChild(regBtn);
+  body.appendChild(r1);
+
+  // --- Upload ---
+  var up = el('div'); up.style.marginTop = '16px';
+  up.appendChild(el('div', 't-sec', 'Or upload an image (iso/ova/ovf/qcow2/vmdk/vhd/vhdx/img/raw/vdi). Large images are better placed on disk and registered by path.'));
+  var r2 = el('div', 'form-row'); r2.style.marginTop = '8px';
+  var fileInp = el('input'); fileInp.type = 'file'; fileInp.className = 'f-input'; fileInp.style.flex = '1';
+  var uDiff = el('select', 'f-select');
+  DIFFS.forEach(function (d) { uDiff.appendChild(new Option(d, d)); });
+  var uPersona = el('input', 'f-input'); uPersona.placeholder = 'persona (optional)'; uPersona.style.maxWidth = '160px';
+  var upBtn = el('button', 'btn btn-secondary', 'Upload');
+  var prog = el('div', 't-muted'); prog.style.marginTop = '6px';
+  upBtn.addEventListener('click', function () {
+    if (!fileInp.files || !fileInp.files.length) { toast('Choose a file', 'err'); return; }
+    var fd = new FormData();
+    fd.append('file', fileInp.files[0]);
+    fd.append('difficulty', uDiff.value);
+    fd.append('persona', uPersona.value.trim());
+    upBtn.disabled = true; prog.textContent = 'Uploading ' + fileInp.files[0].name + '…';
+    // FormData sets its own multipart Content-Type; authOpts only adds the token.
+    api('/api/images/upload', { method: 'POST', body: fd }).then(function (r) {
+      upBtn.disabled = false; prog.textContent = '';
+      toast('Uploaded ' + (r.image && r.image.id ? r.image.id : 'image'), 'ok');
+      refresh();
+    }).catch(function (e) { upBtn.disabled = false; prog.textContent = ''; toast(e.message, 'err'); });
+  });
+  r2.appendChild(fileInp); r2.appendChild(uDiff); r2.appendChild(uPersona); r2.appendChild(upBtn);
+  up.appendChild(r2); up.appendChild(prog);
+  body.appendChild(up);
+
+  panel.appendChild(body);
+  return panel;
+}
+
 function viewImages(c) {
   return tryApi('/api/images').then(function (data) {
     c.replaceChildren();
@@ -1567,13 +1628,15 @@ function viewImages(c) {
     ib.appendChild(el('div', 't-sec',
       'Import ISO/OVA/OVF/qcow2/vmdk decoy images, tag them by difficulty, and sanitise ' +
       '(strip CTF flags, reset known credentials, embed a watermark) before deploying. ' +
-      'Import and apply run from the CLI (miragectl images); the console manages, tags and ' +
-      'previews the sanitisation plan.'));
+      'Register a file already on the host by path, or upload one below; sanitise/apply ' +
+      'run from the CLI (miragectl images).'));
     intro.appendChild(ib);
     c.appendChild(intro);
 
+    c.appendChild(imageAddPanel(c));
+
     if (!images.length) {
-      c.appendChild(emptyState('No images catalogued. Add one: miragectl images import --file box.qcow2 --difficulty hard'));
+      c.appendChild(emptyState('No images catalogued yet. Register one by path or upload one above.'));
       return;
     }
 

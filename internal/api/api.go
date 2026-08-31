@@ -69,11 +69,15 @@ type Deps struct {
 	// Trap is the hypervisor-agnostic ransomware trap, when configured.
 	Trap *fusetrap.Trap
 	// Images is the decoy image library.
-	Images    *catalog.Catalog
-	Tenant    string
-	Site      string
-	StartedAt time.Time
-	Log       *slog.Logger
+	Images *catalog.Catalog
+	// ImagesUploadDir is where the console writes uploaded VM images before
+	// registering them; ImagesMaxUploadBytes caps one upload.
+	ImagesUploadDir      string
+	ImagesMaxUploadBytes int64
+	Tenant               string
+	Site                 string
+	StartedAt            time.Time
+	Log                  *slog.Logger
 	// Token, when set, is required as a Bearer token.
 	Token string
 }
@@ -160,6 +164,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/analyst/{id}", s.analystNarrative)
 	s.mux.HandleFunc("GET /api/feed", s.feedPreview)
 	s.mux.HandleFunc("GET /api/images", s.imagesList)
+	s.mux.HandleFunc("POST /api/images", s.imageRegister)
+	s.mux.HandleFunc("POST /api/images/upload", s.imageUpload)
 	s.mux.HandleFunc("GET /api/images/{id}/plan", s.imagePlan)
 	s.mux.HandleFunc("POST /api/images/{id}/retag", s.imageRetag)
 	s.mux.HandleFunc("DELETE /api/images/{id}", s.imageRemove)

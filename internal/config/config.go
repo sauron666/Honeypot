@@ -55,6 +55,15 @@ type Config struct {
 type ImagesConfig struct {
 	// Catalog is the JSON registry file. Defaults to <data_dir>/images.json.
 	Catalog string `yaml:"catalog"`
+	// UploadDir is where the console writes uploaded VM images (ISO/OVA/qcow2/
+	// vmdk...). Defaults to <data_dir>/images. Uploaded files land here and are
+	// then registered in the catalog; the operator can also drop files here out
+	// of band and register them by path.
+	UploadDir string `yaml:"upload_dir"`
+	// MaxUploadBytes caps a single console upload. Defaults to 8 GiB. VM images
+	// are large; this is a guard against filling the disk, not a hard product
+	// limit -- big images are better placed on disk and registered by path.
+	MaxUploadBytes int64 `yaml:"max_upload_bytes"`
 }
 
 // TrapConfig configures the hypervisor-agnostic ransomware trap: a FUSE-backed
