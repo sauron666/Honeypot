@@ -890,9 +890,9 @@ function showEngagementDrawer(eng) {
           var box = document.getElementById('analyst-box') || el('div');
           box.id = 'analyst-box'; box.replaceChildren();
           box.style.marginTop = '12px';
-          box.appendChild(el('div', 't-muted', 'source: ' + (n.Source || 'template') +
-            (n.RequiresReview ? ' — requires human review' : '')));
-          box.appendChild(el('pre', 'config-block', n.ReportDraft || n.Summary || ''));
+          box.appendChild(el('div', 't-muted', 'source: ' + (n.source || 'template') +
+            (n.requires_review ? ' — requires human review' : '')));
+          box.appendChild(el('pre', 'config-block', n.report_draft || n.summary || ''));
           body.appendChild(box);
         }).catch(function (e) {
           aiBtn.disabled = false; aiBtn.textContent = 'Analyst Narrative';

@@ -33,14 +33,19 @@ API endpoint-и (GET /api/observer, POST /api/observer/{id}/dump), GUI секц�
 vmi-dump-memory работят на Xen 4.17 HVM domU. **За пълна DRAKVUF интроспекция
 е нужен CPU с VMFUNC** (altp2m) — i3-9100T го няма.
 
-**GUI** — 14-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
-full-OS VMs, detection rules, evidence chain, compliance, **observer/VMI**,
-**topology**, presence, config, status. VM секцията вече има start/stop бутони;
-compliance секцията чете от `/api/compliance/{framework}` (беше счупена — query
-vs path); topology секцията рисува цялата естейт като инлайн SVG звезда
-(director→decoys/vms/hub/agents) от `/api/topology`.
-34 REST endpoint-а (10 нови: compliance, graph, topology, VM start/stop, system,
-fingerprint, observer status, observer dump).
+**GUI** — 20-секционен SPA: dashboard, engagements, events, decoys, honeytokens,
+full-OS VMs, images, detection rules, evidence chain, compliance, **observer/VMI**,
+**ransomware trap**, **topology**, presence, **deception packs**, **identity/BEC**,
+**BYOD/wireless**, **global feed**, config, status. VM секцията има start/stop
+бутони; compliance секцията чете от `/api/compliance/{framework}`; topology
+секцията рисува цялата естейт като инлайн SVG звезда (director→decoys/vms/hub/
+agents) от `/api/topology`. **Всяка таблица се сортира** (MutationObserver
+прави всеки `table.tbl` кликаем по колона). **Decoys секцията има builder** —
+форма за добавяне/редакция (POST /api/decoys, merge по id през същия reconcile)
+и „retire" бутон (DELETE /api/decoys/{id}); tokens секцията вече имаше mint/delete.
+**Token auth в GUI**: Bearer от localStorage + cookie `mirage_token`; login
+overlay при 401; статиката е exempt (иначе токенът заключваше конзолата).
+50 REST endpoint-а.
 
 **Туториали** — `docs/tutorials/` (14 броя, български): quickstart, конзола,
 honeytokens, детекции, VM декои, VMI, overlay, AD/Kerberos, breadcrumbs,
@@ -99,7 +104,7 @@ make build
 | `internal/farm` | пълни VM примамки: provisioner, containment gate, baseline, revert, burn, start/stop |
 | `internal/drivers/fabric` | `nftables` (налага + чете правилата), `probe` (тества реалната достижимост) |
 | `internal/drivers/observer` | `none` (честен no-op) + `drakvuf` (agentless VMI, Xen) + `agent` (in-guest сензор, всеки хипервайзор; приемник + fan-out per-decoy, token auth, drop-on-overflow; НЕ декларира CapAgentless) |
-| `internal/api` | REST (34 endpoint-а) + вградена конзола (`internal/api/web/` — 13-секционен SPA); 28 теста: auth, CSP, XSS escape, всеки endpoint без зависимости |
+| `internal/api` | REST (50 endpoint-а) + вградена конзола (`internal/api/web/` — 20-секционен SPA); 40 теста: auth (Bearer+cookie, статика exempt), CSP, XSS escape, decoy builder (merge/edit/remove), packs/saasid/bec/wireless/feed, всеки endpoint без зависимости |
 | `internal/breadcrumbs` | подхвърля примамки-следи на реален endpoint, които водят към декоите: .rdp, ~/.aws, ssh config, история; honeytoken във всяка, обратимо чрез манифест |
 | `internal/drivers/nac` | `none` (честен no-op) + `freeradius` (RADIUS CoA — насочва непознато устройство към deception VLAN вместо да го блокира) |
 | `internal/graph` | `mirage-graph` — attack-path deception; поставя примамки по вероятните пътища на атаката |
@@ -334,7 +339,9 @@ GOTOOLCHAIN=local go test -count=1 -race ./...      # ~90s, всичко тря�
 1. ~~**Образи за VM примамките**~~ ✓ — cloud-init Ubuntu 24.04 шаблон
    (`templates/ubuntu2404-cloud/build-template.sh`), тестван на PVE 8.4.
 2. ~~**Proxmox драйвер**~~ ✓ — REST API клиент, работи дистанционно.
-3. ~~**Комерсиален GUI**~~ ✓ — 13-секционен SPA, 34 API endpoint-а.
+3. ~~**Комерсиален GUI**~~ ✓ — 20-секционен SPA, 50 API endpoint-а, сортиране
+   на всяка таблица, form-driven decoy builder (add/edit/retire), token auth
+   (Bearer+cookie, статика exempt), секции за packs/identity/BEC/wireless/feed.
 4. ~~**VMI observer — hypervisor glue**~~ ✓ — пълен glue: config→app wiring,
    domain resolver, Observe горутини, DumpMemory (vmi-dump-memory/xl), crypto
    hook (apimon→T1486), Xen Probe (/proc/xen + xl), API endpoint-и, GUI секция.
