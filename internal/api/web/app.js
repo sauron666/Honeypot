@@ -1223,7 +1223,9 @@ function decoyBuilder(c, cat) {
 
   var aG = el('div', 'form-group grow');
   aG.appendChild(el('label', 'form-label', 'Addresses (optional, comma-separated)'));
-  var aInp = el('input', 'f-input'); aInp.placeholder = 'blank = farm default bind';
+  var aInp = el('input', 'f-input');
+  aInp.placeholder = 'blank = farm bind; e.g. 192.168.1.150 (must exist on host)';
+  aInp.title = 'Pin this decoy to one or more IPs so it answers there instead of the console address. Each must already be on the host (ip addr add ...).';
   aG.appendChild(aInp); row1.appendChild(aG);
   body.appendChild(row1);
 

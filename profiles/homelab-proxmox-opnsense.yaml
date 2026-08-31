@@ -20,12 +20,20 @@ site: sofia-lab
 data_dir: /var/lib/mirage
 
 api:
-  # Management interface: accessible from the LAN.
+  # Management interface. For a real deployment do NOT leave this on 0.0.0.0:
+  # that puts the operator console on the same address an attacker scans. Bind
+  # it to the management IP (or 127.0.0.1 + an SSH tunnel), and put the decoys
+  # on a separate address (see honeyd.bind below and profiles/README.md ->
+  # "Декоите на отделен IP от конзолата").
   listen: 0.0.0.0:8422
   # token: change-me   # uncomment in production
   public_url: http://192.168.1.100:8422
 
 honeyd:
+  # Decoy bind address. Give the host a second IP (ip addr add 192.168.1.150/24
+  # dev eth0) and set it here so the decoys answer on 192.168.1.150 while the
+  # console stays on the management address. Per-decoy `addresses:` overrides
+  # this and enables projection (one decoy across several unused IPs).
   bind: 0.0.0.0
   max_session_duration: 45m
   max_conns_per_ip: 40
